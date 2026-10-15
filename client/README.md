@@ -23,8 +23,10 @@ egui/eframe, um binário nativo por SO. Ao abrir, conecta e sincroniza sozinha (
 - Editor do bloco selecionado: troca de algoritmo e todos os parâmetros, com nomes, faixas, unidades e opções
   vindos de `assets/params.json`.
 - Edições vão ao vivo para o buffer de edição. "não salvo" aparece quando o buffer difere do preset gravado.
+  Liga/desliga feito pela pedaleira (CTRL, footswitch) é uso ao vivo e não conta como edição.
 - Salvar (só no banco de usuário) pede confirmação.
-- Mudanças feitas no hardware (knobs, pedal de expressão) aparecem na tela em tempo real.
+- Mudanças feitas na pedaleira (CTRL, footswitches, knobs, pedal de expressão, troca de preset) aparecem na tela
+  em tempo real. A barra superior mostra o último evento recebido, e o cabeçalho mostra o estado do CTRL.
 
 Testado no Windows contra o aparelho: seleção, edição de parâmetro, troca de algoritmo, ON/OFF e salvar,
 sempre conferidos relendo o buffer ou ressincronizando.
@@ -44,6 +46,8 @@ ampero current                     # buffer de edição (inclui alterações nã
 ampero select P29-1                # seleciona preset
 ampero set AMP 0 20                # Gain do AMP = 20 (só no buffer de edição, não salva)
 ampero decode-log LOG --json x     # decodifica um log do proxy winmm, sem aparelho
+ampero monitor 60                  # mostra tudo que a pedaleira envia por 60 s
+ampero diff                        # buffer de edição vs preset salvo, byte a byte
 ```
 
 ## Desempenho (Windows, Ampero via USB, 2026-10-15)

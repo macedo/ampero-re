@@ -29,8 +29,11 @@ struct App {
     search: String,
     current: Option<Preset>,
     selected_block: usize,
-    dirty: bool,
     confirm_save: bool,
+    /// Último evento recebido da pedaleira e quando chegou.
+    activity: Option<(String, std::time::Instant)>,
+    /// Blocos cujo liga/desliga foi feito na pedaleira (CTRL, footswitch): uso ao vivo, não conta como "não salvo".
+    pedal_switched: [bool; 9],
     /// O egui pode rodar `ui()` duas vezes no mesmo frame (multi-pass) com o mesmo input;
     /// efeitos colaterais só podem acontecer na primeira passada.
     first_pass: bool,
@@ -52,8 +55,9 @@ impl App {
             search: String::new(),
             current: None,
             selected_block: 2,
-            dirty: false,
             confirm_save: false,
+            activity: None,
+            pedal_switched: [false; 9],
             first_pass: true,
         };
         app.worker.send(Cmd::Connect(app.port.clone()));
@@ -90,15 +94,45 @@ impl App {
                     self.progress = None;
                 }
                 Evt::Current(p) => {
+                    if self.current.as_ref().map(|c| c.index) != Some(p.index) {
+                        self.pedal_switched = [false; 9];
+                    }
+                    // GUI aberta com o CTRL já acionado: as diferenças de liga/desliga vêm do CTRL.
+                    if let Some(saved) = self.presets.iter().find(|s| s.index == p.index)
+                        && saved.ctrl_state != p.ctrl_state
+                    {
+                        for (k, (b, s)) in p.blocks.iter().zip(&saved.blocks).enumerate() {
+                            if b.on != s.on {
+                                self.pedal_switched[k] = true;
+                            }
+                        }
+                    }
                     self.current = Some(p);
-                    self.dirty = false;
                 }
                 Evt::HardwareParam(block, param, value) => {
                     if let Some(p) = self.current.as_mut().and_then(|c| c.blocks.get_mut(block))
                         && let Some(v) = p.params.get_mut(param as usize)
                     {
-                        *v = value;
-                        self.dirty = true;
+                        *v = value; // "não salvo" sai da comparação com o preset gravado
+                    }
+                }
+                Evt::HardwareSwitch(block, on) => {
+                    if let Some(flag) = self.pedal_switched.get_mut(block) {
+                        *flag = true;
+                    }
+                    if let Some(b) = self.current.as_mut().and_then(|c| c.blocks.get_mut(block)) {
+                        b.on = on;
+                    }
+                }
+                Evt::Activity(text) => self.activity = Some((text, std::time::Instant::now())),
+                Evt::CtrlState(v) => {
+                    if let Some(c) = self.current.as_mut() {
+                        c.ctrl_state = v;
+                    }
+                }
+                Evt::Tempo(bpm) => {
+                    if let Some(c) = self.current.as_mut() {
+                        c.tempo = bpm;
                     }
                 }
                 Evt::Saved(bank, slot) => {
@@ -108,7 +142,7 @@ impl App {
                     {
                         *entry = cur.clone();
                     }
-                    self.dirty = false;
+                    self.pedal_switched = [false; 9];
                     self.status =
                         format!("Salvo em banco {bank} {}", ampero::preset::slot_label(slot));
                 }
@@ -153,6 +187,20 @@ impl App {
                 ui.add(egui::ProgressBar::new(f).desired_width(160.0));
             }
             ui.label(&self.status);
+            if let Some((text, at)) = &self.activity {
+                ui.separator();
+                let age = at.elapsed().as_secs_f32();
+                let color = if age < 1.5 {
+                    Color32::from_rgb(240, 190, 70)
+                } else {
+                    Color32::GRAY
+                };
+                ui.label(RichText::new(format!("Pedaleira: {text}")).color(color));
+                if age < 1.5 {
+                    ui.ctx()
+                        .request_repaint_after(std::time::Duration::from_millis(200));
+                }
+            }
         });
     }
 
@@ -233,11 +281,11 @@ impl App {
                                         && self.first_pass
                                     {
                                         block.on = !block.on;
+                                        self.pedal_switched[k] = false; // alternado pela GUI: é edição
                                         self.send(Cmd::Switch {
                                             block: k,
                                             on: block.on,
                                         });
-                                        self.dirty = true;
                                     }
                                 });
                                 let label = block.algorithm_name.as_deref().unwrap_or("?");
@@ -277,7 +325,6 @@ impl App {
                 });
             if alg != block.algorithm {
                 self.send(Cmd::SetAlgorithm { block: k, alg });
-                self.dirty = true;
             }
         });
         ui.add_space(8.0);
@@ -337,7 +384,6 @@ impl App {
                             param: pm.index as u8,
                             value: *value,
                         });
-                        self.dirty = true;
                     }
                     ui.end_row();
                 }
@@ -352,7 +398,7 @@ impl App {
                     .strong(),
             );
             let saved = self.presets.iter().find(|p| p.index == cur.index);
-            if self.dirty || saved.is_some_and(|s| !same_sound(s, cur)) {
+            if saved.is_some_and(|s| !same_sound(s, cur, &self.pedal_switched)) {
                 ui.label(RichText::new("não salvo").color(Color32::from_rgb(230, 180, 60)));
             }
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -370,6 +416,14 @@ impl App {
                     cur.tempo,
                     if cur.volume_pre { "Pre" } else { "Post" }
                 ));
+                // layout da direita para a esquerda: isto aparece à esquerda do volume/tempo
+                let (text, color) = if cur.ctrl_state != 0 {
+                    ("CTRL ON", Color32::from_rgb(240, 190, 70))
+                } else {
+                    ("CTRL off", Color32::from_gray(120))
+                };
+                ui.label(RichText::new(text).strong().color(color))
+                    .on_hover_text(format!("estado dos CTRL: 0x{:02X}", cur.ctrl_state));
             });
         });
     }
@@ -428,12 +482,16 @@ impl eframe::App for App {
     }
 }
 
-/// Compara o que afeta o som (blocos, cadeia, volume), ignorando metadados.
-fn same_sound(a: &Preset, b: &Preset) -> bool {
+/// Compara o que afeta o som (blocos, cadeia, volume), ignorando metadados e o liga/desliga
+/// dos blocos em `ignore_on` (alternados pela pedaleira).
+fn same_sound(a: &Preset, b: &Preset, ignore_on: &[bool; 9]) -> bool {
     a.volume == b.volume
         && a.chain == b.chain
         && a.blocks
             .iter()
             .zip(&b.blocks)
-            .all(|(x, y)| x.on == y.on && x.algorithm == y.algorithm && x.params == y.params)
+            .enumerate()
+            .all(|(k, (x, y))| {
+                (ignore_on[k] || x.on == y.on) && x.algorithm == y.algorithm && x.params == y.params
+            })
 }

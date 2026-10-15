@@ -37,6 +37,8 @@ pub struct Device {
     _in: MidiInputConnection<()>,
     /// Mensagens recebidas que não eram resposta de nenhum pedido (notificações do aparelho).
     pub unsolicited: usize,
+    /// Notificações que chegaram durante um pedido; entregues depois por `drain_incoming`.
+    pending: Vec<Vec<u8>>,
     pub round_trips: usize,
 }
 
@@ -85,13 +87,24 @@ impl Device {
             rx,
             _in: conn_in,
             unsolicited: 0,
+            pending: Vec::new(),
             round_trips: 0,
         })
     }
 
     /// Mensagens que chegaram sem pedido (mudanças feitas no hardware, pedal de expressão…).
     pub fn drain_incoming(&mut self) -> Vec<Vec<u8>> {
-        self.rx.try_iter().collect()
+        let mut msgs = std::mem::take(&mut self.pending);
+        msgs.extend(self.rx.try_iter());
+        msgs
+    }
+
+    /// Espera a próxima mensagem do aparelho (qualquer uma), até `timeout`.
+    pub fn recv(&mut self, timeout: Duration) -> Option<Vec<u8>> {
+        if !self.pending.is_empty() {
+            return Some(self.pending.remove(0));
+        }
+        self.rx.recv_timeout(timeout).ok()
     }
 
     pub fn send(&mut self, msg: &[u8]) -> Result<()> {
@@ -110,7 +123,13 @@ impl Device {
                 let left = deadline.saturating_duration_since(Instant::now());
                 match self.rx.recv_timeout(left) {
                     Ok(resp) if accept(&resp) => return Ok(resp),
-                    Ok(_) => self.unsolicited += 1,
+                    Ok(other) => {
+                        self.unsolicited += 1;
+                        // guarda mudanças feitas no hardware para a UI (com limite, caso ninguém leia)
+                        if p::parse_notification(&other).is_some() && self.pending.len() < 4096 {
+                            self.pending.push(other);
+                        }
+                    }
                     Err(RecvTimeoutError::Timeout) => break,
                     Err(RecvTimeoutError::Disconnected) => bail!("conexão MIDI de entrada fechada"),
                 }

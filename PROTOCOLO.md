@@ -72,7 +72,8 @@ Ferramentas: `tools/extract_presets.awk` (log → hex) e `tools/decode_preset.aw
 | `0x18C` | 3×4 | **Quick Knobs** | `[módulo][alg_hi][alg_lo][param]`; módulo = índice do bloco + 3 (FX1=3 … RVB=11), 2 = nível de patch? |
 | `0x198` | 2 | ? | flag 0/1 |
 | `0x19A` | 9×2 | **ordem da cadeia** | byte par = índice de armazenamento do bloco (`00 01 02 04 03 …` = FX1 FX2 AMP CAB NR …); byte ímpar quase sempre 0 |
-| `0x1AC` | 1 | Vol Position | 1 = Pre, 0 = Post (hipótese: bate com P01-1 e P29-1) |
+| `0x1AB` | 1 | **estado dos CTRL** | bitmask; uma apertada do CTRL no P01-1 levou de `00` a `08` (e ligou o DLY). É o valor da notificação `02 06 23 VV` |
+| `0x1AC` | 1 | Vol Position? | 1 = Pre, 0 = Post bate com P01-1 e P29-1, mas o byte também muda pela notificação `02 06 24 00 VV` (footswitch); pode ser outro estado de CTRL |
 | `0x1AD` | 1 | ? | sempre `01` |
 | `0x1AE` | 1 | ? | flag 0/1 |
 | `0x1AF`–`0x1CA` | 28 | reservado | sempre zero |
@@ -124,10 +125,29 @@ F0 21 25 7F 4D 50 2D 64  12 00 02 06 07  BB PP                F7   gravar buffer
 | `VH VL` | valor (Sustain 39 = `00 27`) |
 
 - Clicar num bloco na UI reenvia "selecionar algoritmo" com o algoritmo atual.
-- **O aparelho manda o mesmo formato** quando algo muda no hardware: ex. pedal de expressão
-  movendo o Position do Classic PS chega como `12 10 01 00 02 01 22 01 00 62` (dezenas por segundo).
-- `12 00 02 06 05 00 00 00 78` chega do aparelho junto com essas mudanças (estado "editado"? — investigar).
 - Salvar não gerou resposta do aparelho.
+
+### Notificações do aparelho (mudanças feitas no hardware)
+
+Capturadas com `ampero monitor` enquanto o usuário usava CTRL, knobs, footswitches e troca de preset
+(2026-10-15). O driver MIDI do Windows entrega a entrada a todos os clientes abertos, então o editor
+oficial, a GUI e o monitor recebem tudo, inclusive as respostas aos pedidos uns dos outros.
+
+| Mensagem | Significado |
+|---|---|
+| `12 10 SS 00 02 AH AL PP VH VL` | parâmetro mudou (knob, Quick Knob, pedal de expressão). Mesmo formato da escrita |
+| `12 10 SS 00 00 VV` | bloco SS ligou (`7F`) / desligou (`00`). Ex.: CTRL do P01-1 alterna o DLY (`SS=08`) |
+| `12 10 SS 00 01 AH AL` | algoritmo trocado (mesmo formato da escrita; ainda não visto vindo do aparelho) |
+| `12 00 02 06 05 00 00 TH TL` | tempo atual em BPM (14 bits): `00 78` = 120, `01 16` = 150. Vem junto com **cada** mudança e na troca de preset |
+| `12 00 02 06 04 01 xx` | preset trocado na pedaleira (acompanhado de `B6 08 xx`) |
+| `12 00 02 06 23 VV` | novo estado dos CTRL = byte `0x1AB` do preset |
+| `12 00 02 06 24 00 VV` | outro footswitch; deve espelhar o byte `0x1AC` (0x188+0x24) |
+
+Uma apertada do CTRL no P01-1 gerou `12 10 08 00 00 7F` + `12 00 02 06 23 08`. O `ampero diff` mostrou exatamente
+dois bytes diferentes no buffer de edição: `0x146` (switch do DLY) `00→01` e `0x1AB` `00→08`.
+
+A GUI aplica direto as notificações de parâmetro, switch, tempo e CTRL. Para troca de preset e mensagens
+desconhecidas, ela relê o buffer de edição (~14 ms), com debounce de 150 ms.
 
 ### Hipóteses sobre as listas da sync
 

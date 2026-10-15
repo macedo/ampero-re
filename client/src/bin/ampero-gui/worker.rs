@@ -1,8 +1,8 @@
 //! Thread dona da conexão MIDI. A UI manda `Cmd`s e recebe `Evt`s; nada de I/O na thread da UI.
 
 use ampero::device::{Device, all_preset_indices};
-use ampero::preset::Preset;
-use ampero::protocol as p;
+use ampero::preset::{MODULES, Preset};
+use ampero::protocol::{self as p, Notification};
 use std::sync::mpsc::{Receiver, RecvTimeoutError, Sender, channel};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -51,6 +51,14 @@ pub enum Evt {
     Current(Preset),
     /// Mudança vinda do hardware: (bloco, parâmetro, valor)
     HardwareParam(usize, u8, u16),
+    /// Bloco ligado/desligado no hardware (CTRL, footswitch): (bloco, ligado)
+    HardwareSwitch(usize, bool),
+    /// Tempo do preset atual (BPM)
+    Tempo(u16),
+    /// Estado dos CTRL (byte 0x1AB do preset)
+    CtrlState(u8),
+    /// Descrição de algo que chegou da pedaleira (para a barra de status)
+    Activity(String),
     Saved(u8, u8),
     Error(String),
 }
@@ -78,6 +86,8 @@ impl Worker {
 
 fn run(rx: Receiver<Cmd>, tx: Sender<Evt>, repaint: impl Fn()) {
     let mut dev: Option<Device> = None;
+    // Releitura do buffer agendada após notificações que não sabemos aplicar sozinhos (debounce).
+    let mut refresh_at: Option<Instant> = None;
     let emit = |e: Evt| {
         let _ = tx.send(e);
         repaint();
@@ -115,13 +125,67 @@ fn run(rx: Receiver<Cmd>, tx: Sender<Evt>, repaint: impl Fn()) {
 
         if let Some(d) = dev.as_mut() {
             for msg in d.drain_incoming() {
-                if let Some((slot, _alg, param, value)) = p::parse_param_change(&msg)
-                    && (1..=9).contains(&slot)
-                {
-                    emit(Evt::HardwareParam(slot as usize - 1, param, value));
+                let notification = p::parse_notification(&msg);
+                // Respostas a pedidos de outros programas (o driver entrega a todos) não são eventos da pedaleira.
+                if notification.is_some() && !matches!(notification, Some(Notification::Tempo(_))) {
+                    emit(Evt::Activity(describe(notification, &msg)));
+                }
+                match notification {
+                    Some(Notification::Param {
+                        slot: s @ 1..=9,
+                        param,
+                        value,
+                        ..
+                    }) => emit(Evt::HardwareParam(s as usize - 1, param, value)),
+                    Some(Notification::Switch {
+                        slot: s @ 1..=9,
+                        on,
+                    }) => emit(Evt::HardwareSwitch(s as usize - 1, on)),
+                    Some(Notification::Tempo(bpm)) => emit(Evt::Tempo(bpm)),
+                    Some(Notification::CtrlState(v)) => emit(Evt::CtrlState(v)),
+                    Some(_) => refresh_at = Some(Instant::now() + Duration::from_millis(150)),
+                    None => {}
+                }
+            }
+            if refresh_at.is_some_and(|t| Instant::now() >= t) {
+                refresh_at = None;
+                match d.read_edit_buffer() {
+                    Ok(p) => emit(Evt::Current(p)),
+                    Err(e) => emit(Evt::Error(format!("{e:#}"))),
                 }
             }
         }
+    }
+}
+
+/// Texto curto para a barra de status descrevendo o que chegou da pedaleira.
+fn describe(n: Option<Notification>, msg: &[u8]) -> String {
+    let module = |slot: u8| {
+        MODULES
+            .get((slot as usize).wrapping_sub(1))
+            .copied()
+            .unwrap_or("?")
+    };
+    match n {
+        Some(Notification::Param {
+            slot, param, value, ..
+        }) => {
+            format!("{} parâmetro {param} = {value}", module(slot))
+        }
+        Some(Notification::Switch { slot, on }) => {
+            format!(
+                "{} {}",
+                module(slot),
+                if on { "ligado" } else { "desligado" }
+            )
+        }
+        Some(Notification::Algorithm { slot, alg }) => format!("{} algoritmo {alg}", module(slot)),
+        Some(Notification::Tempo(bpm)) => format!("tempo {bpm} BPM"),
+        Some(Notification::PresetChanged) => "preset trocado".into(),
+        Some(Notification::CtrlState(v)) => {
+            format!("CTRL {}", if v != 0 { "ativo" } else { "inativo" })
+        }
+        Some(Notification::Other) | None => format!("mensagem {}", ampero::device::hex(msg)),
     }
 }
 

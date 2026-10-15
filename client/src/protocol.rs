@@ -125,24 +125,58 @@ pub fn set_param(slot: u8, alg: u16, param: u8, value: u16) -> Vec<u8> {
     frame(OP_WRITE, &[0x10, slot, 0x00, 0x02, ah, al, param, vh, vl])
 }
 
-/// Mudança de parâmetro (o aparelho envia o mesmo formato de [`set_param`] quando algo muda no hardware).
-/// Retorna `(slot, algoritmo, parâmetro, valor)`.
-pub fn parse_param_change(msg: &[u8]) -> Option<(u8, u16, u8, u16)> {
-    if !is_ampero_sysex(msg)
-        || msg.len() != 19
-        || msg[8] != OP_WRITE
-        || msg[9] != 0x10
-        || msg[11] != 0x00
-        || msg[12] != 0x02
-    {
+/// Mensagens que o aparelho envia sozinho quando algo muda no hardware (footswitch, CTRL, knobs, pedal).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Notification {
+    /// Mesmo formato de [`set_param`]: `(slot, algoritmo, parâmetro, valor)`.
+    Param {
+        slot: u8,
+        alg: u16,
+        param: u8,
+        value: u16,
+    },
+    /// `12 10 SS 00 00 VV` — bloco ligado (VV ≥ 0x40) ou desligado (CTRL, footswitch).
+    Switch { slot: u8, on: bool },
+    /// `12 10 SS 00 01 AH AL` — algoritmo trocado no aparelho.
+    Algorithm { slot: u8, alg: u16 },
+    /// `12 00 02 06 05 00 00 TH TL` — tempo atual em BPM (chega junto com cada mudança).
+    Tempo(u16),
+    /// `12 00 02 06 04 …` — preset trocado no aparelho.
+    PresetChanged,
+    /// `12 00 02 06 23 VV` — estado dos CTRL (byte 0x1AB do preset) após apertar um footswitch.
+    CtrlState(u8),
+    /// Outra notificação `12 00 02 06 …` ainda não decodificada (ex.: `24` dos footswitches).
+    Other,
+}
+
+pub fn parse_notification(msg: &[u8]) -> Option<Notification> {
+    if !is_ampero_sysex(msg) || msg.len() < 14 || msg[8] != OP_WRITE {
         return None;
     }
-    Some((
-        msg[10],
-        join14(msg[13], msg[14]),
-        msg[15],
-        join14(msg[16], msg[17]),
-    ))
+    let n = msg.len();
+    match (msg[9], msg[11], msg[12]) {
+        (0x10, 0x00, 0x02) if n == 19 => Some(Notification::Param {
+            slot: msg[10],
+            alg: join14(msg[13], msg[14]),
+            param: msg[15],
+            value: join14(msg[16], msg[17]),
+        }),
+        (0x10, 0x00, 0x00) if n == 15 => Some(Notification::Switch {
+            slot: msg[10],
+            on: msg[13] >= 0x40,
+        }),
+        (0x10, 0x00, 0x01) if n == 16 => Some(Notification::Algorithm {
+            slot: msg[10],
+            alg: join14(msg[13], msg[14]),
+        }),
+        (0x00, 0x06, 0x05) if msg[10] == 0x02 && n == 18 => {
+            Some(Notification::Tempo(join14(msg[15], msg[16])))
+        }
+        (0x00, 0x06, 0x04) if msg[10] == 0x02 => Some(Notification::PresetChanged),
+        (0x00, 0x06, 0x23) if msg[10] == 0x02 && n == 15 => Some(Notification::CtrlState(msg[13])),
+        (0x00, 0x06, _) if msg[10] == 0x02 => Some(Notification::Other),
+        _ => None,
+    }
 }
 
 /// Troca o algoritmo de um bloco no buffer de edição.
@@ -232,13 +266,6 @@ mod tests {
         );
         assert_eq!(select_preset(1, 84), [hex("B5 00 01"), hex("C5 54")]);
         assert_eq!(block_switch(4, false), hex("B5 34 00")); // CAB
-        // pedal de expressão no Classic PS (capturado do aparelho)
-        assert_eq!(
-            parse_param_change(&hex(
-                "F0 21 25 7F 4D 50 2D 64 12 10 01 00 02 01 22 01 00 62 F7"
-            )),
-            Some((1, 162, 1, 98))
-        );
         assert_eq!(
             save_preset(1, 84),
             hex("F0 21 25 7F 4D 50 2D 64 12 00 02 06 07 01 54 F7")
@@ -249,6 +276,50 @@ mod tests {
                 "F0 21 25 7F 4D 50 2D 64 12 10 00 00 00 01 54 4B 20 4E 49 55 20 44 53 00 00 00 00 00 00 00 00 00 F7"
             )
         );
+    }
+
+    #[test]
+    fn parses_hardware_notifications_captured_from_the_pedal() {
+        use Notification::*;
+        let n = |s: &str| parse_notification(&hex(s));
+        // pedal de expressão no Classic PS
+        assert_eq!(
+            n("F0 21 25 7F 4D 50 2D 64 12 10 01 00 02 01 22 01 00 62 F7"),
+            Some(Param {
+                slot: 1,
+                alg: 162,
+                param: 1,
+                value: 98
+            })
+        );
+        // CTRL alternando o DLY
+        assert_eq!(
+            n("F0 21 25 7F 4D 50 2D 64 12 10 08 00 00 7F F7"),
+            Some(Switch { slot: 8, on: true })
+        );
+        assert_eq!(
+            n("F0 21 25 7F 4D 50 2D 64 12 10 08 00 00 00 F7"),
+            Some(Switch { slot: 8, on: false })
+        );
+        assert_eq!(
+            n("F0 21 25 7F 4D 50 2D 64 12 00 02 06 05 00 00 01 16 F7"),
+            Some(Tempo(150))
+        );
+        assert_eq!(
+            n("F0 21 25 7F 4D 50 2D 64 12 00 02 06 04 01 02 F7"),
+            Some(PresetChanged)
+        );
+        assert_eq!(
+            n("F0 21 25 7F 4D 50 2D 64 12 00 02 06 23 08 F7"),
+            Some(CtrlState(0x08))
+        );
+        assert_eq!(
+            n("F0 21 25 7F 4D 50 2D 64 12 00 02 06 24 00 01 F7"),
+            Some(Other)
+        );
+        // respostas de pedidos e MIDI curto não são notificações
+        assert_eq!(n("F0 21 25 7F 4D 50 2D 64 12 00 00 05 00 01 00 F7"), None);
+        assert_eq!(parse_notification(&hex("B6 08 00")), None);
     }
 
     #[test]

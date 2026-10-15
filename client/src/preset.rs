@@ -13,6 +13,9 @@ const EXP_ENTRIES: usize = 8;
 const TEMPO_AT: usize = 0x18A;
 const QUICK_KNOBS_AT: usize = 0x18C;
 const CHAIN_AT: usize = 0x19A;
+/// Estado dos footswitches CTRL (bitmask; o CTRL do P01-1 liga o bit 0x08). Reportado pela notificação `02 06 23 VV`.
+const CTRL_STATE_AT: usize = 0x1AB;
+/// Hipótese: Vol Position (1 = Pre). Também muda com a notificação `02 06 24 00 VV`, então pode ser estado de footswitch.
 const VOL_POSITION_AT: usize = 0x1AC;
 
 /// Primeiro código de CAB que aponta para um slot de IR do usuário (20 slots).
@@ -51,6 +54,7 @@ pub struct Preset {
     pub volume: u16,
     pub tempo: u16,
     pub volume_pre: bool,
+    pub ctrl_state: u8,
     pub blocks: Vec<Block>,
     pub chain: Vec<&'static str>,
     pub quick_knobs: Vec<Target>,
@@ -153,6 +157,7 @@ impl Preset {
             volume: u16be(2),
             tempo: u16be(TEMPO_AT),
             volume_pre: raw[VOL_POSITION_AT] != 0,
+            ctrl_state: raw[CTRL_STATE_AT],
             blocks,
             chain: (0..9)
                 .filter_map(|k| MODULES.get(raw[CHAIN_AT + 2 * k] as usize).copied())

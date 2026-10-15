@@ -12,9 +12,11 @@ USO:
   ampero sync [--json ARQ]             lê nomes + todos os presets e mede o tempo
   ampero show P29-1                    lê um preset do banco de usuário
   ampero current                       lê o buffer de edição (preset atual)
+  ampero diff                          compara o buffer de edição com o preset salvo (byte a byte)
   ampero select P29-1                  seleciona preset (CC0 + Program Change)
   ampero set MOD PARAM VALOR           altera parâmetro no buffer de edição (ex.: set AMP 0 20)
   ampero decode-log LOG [--json ARQ]   decodifica presets de um log do proxy winmm (offline)
+  ampero monitor [SEGUNDOS]           mostra tudo que o aparelho envia (padrão: 60 s)
 
 OPÇÕES:
   --port NOME   trecho do nome da porta MIDI (padrão: Ampero)
@@ -128,6 +130,20 @@ fn main() -> Result<()> {
             print!("{}", pr.summary());
             write_json(&a.json, &pr)?;
         }
+        "diff" => {
+            let mut dev = Device::open(&a.port)?;
+            let cur = dev.read_edit_buffer()?;
+            let saved = dev.read_preset(cur.index)?;
+            println!(
+                "buffer de edição vs salvo: banco {} {} \"{}\"",
+                cur.bank, cur.label, cur.name
+            );
+            for (o, (b, s)) in cur.raw.iter().zip(&saved.raw).enumerate() {
+                if b != s {
+                    println!("  0x{o:03X}: salvo {s:02X} -> buffer {b:02X}");
+                }
+            }
+        }
         "select" => {
             let label = a.pos.first().context("uso: ampero select P29-1")?;
             let (_, slot) = preset_index(a.bank, label)?;
@@ -164,6 +180,23 @@ fn main() -> Result<()> {
                 current.label,
                 block.params.get(param as usize).copied().unwrap_or(0)
             );
+        }
+        "monitor" => {
+            let secs: u64 = a.pos.first().map(|s| s.parse()).transpose()?.unwrap_or(60);
+            let mut dev = Device::open(&a.port)?;
+            let t0 = Instant::now();
+            let end = t0 + std::time::Duration::from_secs(secs);
+            eprintln!("monitorando por {secs} s… mexa na pedaleira");
+            while let Some(left) = end.checked_duration_since(Instant::now()) {
+                if let Some(msg) = dev.recv(left) {
+                    println!(
+                        "{:9.3} {:3}: {}",
+                        t0.elapsed().as_secs_f64(),
+                        msg.len(),
+                        device::hex(&msg)
+                    );
+                }
+            }
         }
         "decode-log" => {
             let path = a.pos.first().context("uso: ampero decode-log LOG")?;
