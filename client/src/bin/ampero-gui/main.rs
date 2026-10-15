@@ -241,70 +241,102 @@ impl App {
         }
     }
 
+    /// Cadeia de sinal numa faixa horizontal (como no editor oficial), com rolagem lateral se não couber.
+    /// Cada card: tipo do bloco + ON/OFF em cima, miniatura do efeito no meio, nome embaixo.
     fn chain(&mut self, ui: &mut egui::Ui, cur: &mut Preset) {
-        const TILE: f32 = 112.0;
-        // largura total do tile: conteúdo + margens (2×6) + borda + espaçamento entre itens
-        let outer = TILE + 12.0 + 3.0 + ui.spacing().item_spacing.x;
-        let per_row = (ui.available_width() / outer).floor().max(1.0) as usize;
-        for row in cur.chain.clone().chunks(per_row) {
-            ui.horizontal(|ui| {
-                for &name in row {
-                    let k = MODULES.iter().position(|m| *m == name).unwrap_or(0);
-                    let block = &mut cur.blocks[k];
-                    let fill = if block.on {
-                        Color32::from_rgb(70, 55, 20)
-                    } else {
-                        Color32::from_gray(35)
-                    };
-                    let stroke = if self.selected_block == k {
-                        Color32::from_rgb(230, 180, 60)
-                    } else {
-                        Color32::from_gray(70)
-                    };
-                    egui::Frame::new()
-                        .fill(fill)
-                        .stroke(egui::Stroke::new(1.5, stroke))
-                        .corner_radius(6.0)
-                        .inner_margin(6.0)
-                        .show(ui, |ui| {
-                            ui.set_width(TILE);
-                            ui.vertical(|ui| {
-                                ui.horizontal(|ui| {
-                                    ui.add_sized(
-                                        [TILE - 46.0, 18.0],
-                                        egui::Label::new(RichText::new(block.module).strong()),
-                                    );
-                                    let (text, color) = if block.on {
-                                        ("ON", Color32::from_rgb(240, 190, 70))
-                                    } else {
-                                        ("OFF", Color32::from_gray(140))
+        const CARD_W: f32 = 92.0;
+        const THUMB_H: f32 = 64.0;
+        egui::ScrollArea::horizontal()
+            .id_salt("chain")
+            .show(ui, |ui| {
+                ui.horizontal(|ui| {
+                    for name in cur.chain.clone() {
+                        let k = MODULES.iter().position(|m| *m == name).unwrap_or(0);
+                        let block = &mut cur.blocks[k];
+                        let thumb = match (&self.resources, block.algorithm_name.as_deref()) {
+                            (Some(res), Some(n)) => res.image_path(block.module, n),
+                            _ => None,
+                        }
+                        .and_then(|p| self.texture(ui.ctx(), &p));
+
+                        let fill = if block.on {
+                            Color32::from_rgb(70, 55, 20)
+                        } else {
+                            Color32::from_gray(35)
+                        };
+                        let stroke = if self.selected_block == k {
+                            Color32::from_rgb(230, 180, 60)
+                        } else {
+                            Color32::from_gray(70)
+                        };
+                        egui::Frame::new()
+                            .fill(fill)
+                            .stroke(egui::Stroke::new(1.5, stroke))
+                            .corner_radius(6.0)
+                            .inner_margin(6.0)
+                            .show(ui, |ui| {
+                                ui.set_width(CARD_W);
+                                ui.vertical(|ui| {
+                                    // topo: tipo do bloco + ON/OFF
+                                    ui.horizontal(|ui| {
+                                        ui.add_sized(
+                                            [CARD_W - 42.0, 18.0],
+                                            egui::Label::new(RichText::new(block.module).strong()),
+                                        );
+                                        let (text, color) = if block.on {
+                                            ("ON", Color32::from_rgb(240, 190, 70))
+                                        } else {
+                                            ("OFF", Color32::from_gray(140))
+                                        };
+                                        let toggle = egui::Button::new(
+                                            RichText::new(text).small().strong().color(color),
+                                        );
+                                        if ui.add_sized([34.0, 18.0], toggle).clicked()
+                                            && self.first_pass
+                                        {
+                                            block.on = !block.on;
+                                            self.pedal_switched[k] = false; // alternado pela GUI: é edição
+                                            self.send(Cmd::Switch {
+                                                block: k,
+                                                on: block.on,
+                                            });
+                                        }
+                                    });
+                                    // meio: miniatura (clicar seleciona o bloco)
+                                    let picture = match &thumb {
+                                        Some(tex) => {
+                                            let size = tex.size_vec2();
+                                            let scale = (THUMB_H / size.y).min(CARD_W / size.x);
+                                            let img = egui::Image::new((tex.id(), size * scale));
+                                            let img = if block.on {
+                                                img
+                                            } else {
+                                                img.tint(Color32::from_gray(110))
+                                            };
+                                            egui::Button::image(img).frame(false)
+                                        }
+                                        None => egui::Button::new(
+                                            RichText::new(block.module).size(20.0).weak(),
+                                        )
+                                        .frame(false),
                                     };
-                                    let toggle = egui::Button::new(
-                                        RichText::new(text).small().strong().color(color),
-                                    );
-                                    if ui.add_sized([38.0, 18.0], toggle).clicked()
-                                        && self.first_pass
-                                    {
-                                        block.on = !block.on;
-                                        self.pedal_switched[k] = false; // alternado pela GUI: é edição
-                                        self.send(Cmd::Switch {
-                                            block: k,
-                                            on: block.on,
-                                        });
+                                    let clicked_picture =
+                                        ui.add_sized([CARD_W, THUMB_H], picture).clicked();
+                                    // embaixo: nome do efeito
+                                    let label = block.algorithm_name.as_deref().unwrap_or("?");
+                                    let select = egui::Button::new(RichText::new(label).small())
+                                        .frame(false)
+                                        .truncate();
+                                    let clicked_name =
+                                        ui.add_sized([CARD_W, 16.0], select).clicked();
+                                    if clicked_picture || clicked_name {
+                                        self.selected_block = k;
                                     }
                                 });
-                                let label = block.algorithm_name.as_deref().unwrap_or("?");
-                                let select = egui::Button::new(RichText::new(label).small())
-                                    .frame(false)
-                                    .truncate();
-                                if ui.add_sized([TILE, 16.0], select).clicked() {
-                                    self.selected_block = k;
-                                }
                             });
-                        });
-                }
+                    }
+                });
             });
-        }
     }
 
     fn block_editor(&mut self, ui: &mut egui::Ui, cur: &mut Preset) {
@@ -344,7 +376,7 @@ impl App {
 
     /// Foto + nome + descrição do efeito, como no editor oficial (lidos da instalação dele).
     fn effect_info(&mut self, ui: &mut egui::Ui, module: &str, name: Option<&str>) {
-        const WIDTH: f32 = 250.0;
+        const WIDTH: f32 = 290.0;
         const IMAGE_MAX_H: f32 = 200.0;
         let (image, description) = match (&self.resources, name) {
             (Some(res), Some(n)) => (
@@ -368,8 +400,8 @@ impl App {
                 (_, Some(text)) => {
                     egui::ScrollArea::vertical()
                         .id_salt("description")
-                        .max_height(240.0)
-                        .show(ui, |ui| ui.label(RichText::new(text).small()));
+                        .max_height(300.0)
+                        .show(ui, |ui| description_view(ui, &text));
                 }
                 (Some(_), None) => {
                     ui.label(
@@ -581,4 +613,48 @@ fn same_sound(a: &Preset, b: &Preset, ignore_on: &[bool; 9]) -> bool {
             .all(|(k, (x, y))| {
                 (ignore_on[k] || x.on == y.on) && x.algorithm == y.algorithm && x.params == y.params
             })
+}
+
+/// Descrição do efeito: parágrafos normais; na seção "Controls:" o nome de cada controle vem em destaque,
+/// com um pequeno espaço entre os itens; a nota de marcas registradas (`*…`) fica menor e esmaecida.
+fn description_view(ui: &mut egui::Ui, text: &str) {
+    const SIZE: f32 = 13.5;
+    let gold = Color32::from_rgb(240, 190, 70);
+    let body = ui.visuals().text_color();
+    let mut in_controls = false;
+    let mut pending_gap = false;
+    for line in text.lines().map(str::trim) {
+        if line.is_empty() {
+            pending_gap = true;
+            continue;
+        }
+        if pending_gap {
+            ui.add_space(6.0);
+            pending_gap = false;
+        }
+        if line.to_lowercase().starts_with("controls") && line.ends_with(':') {
+            in_controls = true;
+            ui.label(RichText::new(line).size(SIZE).strong());
+            ui.add_space(2.0);
+        } else if line.starts_with('*') {
+            in_controls = false;
+            ui.label(RichText::new(line).size(SIZE - 2.5).weak());
+        } else if let Some((name, desc)) = line
+            .split_once(':')
+            .filter(|(n, _)| in_controls && n.len() <= 40)
+        {
+            let mut job = egui::text::LayoutJob::default();
+            let fmt = |color| egui::TextFormat {
+                font_id: egui::FontId::proportional(SIZE),
+                color,
+                ..Default::default()
+            };
+            job.append(name.trim(), 0.0, fmt(gold));
+            job.append(&format!(": {}", desc.trim()), 0.0, fmt(body));
+            ui.label(job);
+            ui.add_space(3.0);
+        } else {
+            ui.label(RichText::new(line).size(SIZE));
+        }
+    }
 }

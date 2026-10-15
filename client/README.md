@@ -19,7 +19,8 @@ cargo build --release --features gui   # CLI + interface gráfica (ampero-gui)
 egui/eframe, um binário nativo por SO. Ao abrir, conecta e sincroniza sozinha (~2,5 s).
 
 - Lista de presets (User / Factory) com busca. Clicar seleciona o preset no aparelho.
-- Cadeia de sinal na ordem real do preset, com botão ON/OFF por bloco (CC 48+bloco).
+- Cadeia de sinal na ordem real do preset, numa faixa horizontal de cards: tipo do bloco e botão ON/OFF
+  (CC 48+bloco) em cima, miniatura do efeito no meio (esmaecida quando desligado) e nome embaixo.
 - Editor do bloco selecionado: troca de algoritmo e todos os parâmetros, com nomes, faixas, unidades e opções
   vindos de `assets/params.json`.
 - Ao selecionar um efeito, aparecem a foto e a descrição dele, como no editor oficial. Elas são lidas em tempo de
