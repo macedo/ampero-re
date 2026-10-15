@@ -48,7 +48,7 @@ sempre conferidos relendo o buffer ou ressincronizando.
 
 ### Assistente de timbre (IA)
 
-Painel à direita, recolhível (» recolhe para uma faixa fina; « expande), para conversar com um agente que monta timbres de
+Painel à direita, recolhível (começa recolhido: « na faixa da direita abre, » recolhe), para conversar com um agente que monta timbres de
 músicas, bandas ou estilos usando **só o que o Ampero tem**:
 
 - o agente consulta o catálogo por ferramentas (`listar_algoritmos`, `detalhar_algoritmo`, `preset_atual`) em vez de

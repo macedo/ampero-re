@@ -75,7 +75,7 @@ impl App {
             textures: Default::default(),
             first_pass: true,
             assistant: assistant_panel::AssistantPanel::new(&cc.egui_ctx),
-            assistant_open: true,
+            assistant_open: false, // começa recolhido; « na faixa da direita abre
         };
         app.worker.send(Cmd::Connect(app.port.clone()));
         app.worker.send(Cmd::Sync);
