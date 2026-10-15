@@ -1,0 +1,150 @@
+name: Release
+
+# Disparado por uma tag vX.Y.Z (ex.: git tag v0.2.0 && git push origin v0.2.0).
+# Compila CLI + GUI para Windows, Linux e macOS (universal) e publica uma Release com os pacotes.
+
+on:
+  push:
+    tags: ["v*.*.*"]
+  # ensaio: PRs que mexem neste workflow compilam e empacotam tudo, mas não publicam
+  pull_request:
+    paths: [".github/workflows/release.yml"]
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+defaults:
+  run:
+    working-directory: client
+    shell: bash
+
+jobs:
+  version:
+    name: conferir versão
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.v.outputs.version }}
+    steps:
+      - uses: actions/checkout@v5
+      - id: v
+        name: A tag precisa bater com a versão do Cargo.toml
+        run: |
+          crate=$(grep -m1 '^version' Cargo.toml | cut -d'"' -f2)
+          if [ "$GITHUB_REF_TYPE" != "tag" ]; then
+            echo "ensaio (sem tag): versão $crate"
+            echo "version=$crate" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          tag="${GITHUB_REF_NAME#v}"
+          echo "tag=$tag  Cargo.toml=$crate"
+          if [ "$tag" != "$crate" ]; then
+            echo "::error::A tag v$tag não bate com a versão $crate do client/Cargo.toml"
+            exit 1
+          fi
+          echo "version=$crate" >> "$GITHUB_OUTPUT"
+
+  build:
+    name: build (${{ matrix.name }})
+    needs: version
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: windows-x64
+            os: windows-latest
+          - name: linux-x64
+            os: ubuntu-24.04
+          - name: macos-universal
+            os: macos-latest
+    runs-on: ${{ matrix.os }}
+    env:
+      PKG: ampero-${{ needs.version.outputs.version }}-${{ matrix.name }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.name == 'macos-universal' && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
+      - name: Dependências de sistema (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libasound2-dev libxkbcommon-dev libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: client
+          key: release-${{ matrix.name }}
+
+      - name: Testes
+        run: cargo test --features gui
+
+      - name: Build (Windows / Linux)
+        if: runner.os != 'macOS'
+        run: |
+          cargo build --release --features gui
+          mkdir -p "dist/$PKG"
+          ext=""; [ "$RUNNER_OS" = "Windows" ] && ext=".exe"
+          cp "target/release/ampero$ext" "target/release/ampero-gui$ext" "dist/$PKG/"
+
+      - name: Build (macOS universal)
+        if: runner.os == 'macOS'
+        run: |
+          for t in aarch64-apple-darwin x86_64-apple-darwin; do
+            cargo build --release --features gui --target "$t"
+          done
+          mkdir -p "dist/$PKG"
+          for bin in ampero ampero-gui; do
+            lipo -create -output "dist/$PKG/$bin" \
+              "target/aarch64-apple-darwin/release/$bin" "target/x86_64-apple-darwin/release/$bin"
+            lipo -info "dist/$PKG/$bin"
+          done
+
+      - name: Empacotar
+        run: |
+          cp README.md "dist/$PKG/"
+          cd dist
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            7z a -tzip "$PKG.zip" "$PKG" > /dev/null
+          else
+            tar -czf "$PKG.tar.gz" "$PKG"
+          fi
+          ls -la
+
+      - name: Smoke test da CLI empacotada
+        run: |
+          ext=""; [ "$RUNNER_OS" = "Windows" ] && ext=".exe"
+          "dist/$PKG/ampero$ext" decode-log tests/fixtures/sync_excerpt.log | grep -q 'K NIU DS'
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.PKG }}
+          path: client/dist/${{ env.PKG }}.*
+          if-no-files-found: error
+
+  release:
+    name: publicar release
+    needs: [version, build]
+    if: github.ref_type == 'tag'
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: .
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Checksums
+        run: |
+          cd dist
+          sha256sum ampero-* > SHA256SUMS
+          cat SHA256SUMS
+      - name: Criar release com os pacotes
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" dist/* \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "Ampero $GITHUB_REF_NAME" \
+            --generate-notes \
+            --verify-tag
