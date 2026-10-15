@@ -1,0 +1,68 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+
+defaults:
+  run:
+    working-directory: client
+
+jobs:
+  lint:
+    name: fmt + clippy
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - name: Dependências de sistema (ALSA, X11/xkb para a GUI)
+        run: sudo apt-get update && sudo apt-get install -y libasound2-dev libxkbcommon-dev libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: client
+      - run: cargo fmt --check
+      - run: cargo clippy --all-targets --features gui -- -D warnings
+
+  build:
+    name: build + test (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            exe: ""
+          - os: macos-latest
+            exe: ""
+          - os: windows-latest
+            exe: .exe
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Dependências de sistema (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libasound2-dev libxkbcommon-dev libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: client
+      - name: Testes
+        run: cargo test --features gui
+      - name: Build release (CLI + GUI)
+        run: cargo build --release --features gui
+      - name: Smoke test da CLI (decodifica a captura de exemplo, sem aparelho)
+        shell: bash
+        run: ./target/release/ampero${{ matrix.exe }} decode-log tests/fixtures/sync_excerpt.log | grep -q 'K NIU DS'
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ampero-${{ runner.os }}
+          path: |
+            client/target/release/ampero${{ matrix.exe }}
+            client/target/release/ampero-gui${{ matrix.exe }}
+          if-no-files-found: error

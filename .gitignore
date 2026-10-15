@@ -1,0 +1,9 @@
+# Cópia do editor oficial (binários e recursos da Hotone) — não redistribuir
+/app/
+# Capturas do aparelho e dados derivados
+/logs/
+/data/
+# Artefatos de build
+/client/target/
+/proxy/winmm.dll
+/proxy/winmm.def
