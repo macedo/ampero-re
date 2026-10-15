@@ -48,7 +48,8 @@ struct App {
     first_pass: bool,
     /// Painel do assistente de timbre (IA).
     assistant: assistant_panel::AssistantPanel,
-    show_assistant: bool,
+    /// Painel do assistente expandido (false = faixa recolhida).
+    assistant_open: bool,
 }
 
 impl App {
@@ -74,7 +75,7 @@ impl App {
             textures: Default::default(),
             first_pass: true,
             assistant: assistant_panel::AssistantPanel::new(&cc.egui_ctx),
-            show_assistant: true,
+            assistant_open: true,
         };
         app.worker.send(Cmd::Connect(app.port.clone()));
         app.worker.send(Cmd::Sync);
@@ -240,14 +241,6 @@ impl App {
                     self.send(Cmd::ReadCurrent);
                 }
             });
-            let label = if self.show_assistant {
-                "Ocultar assistente"
-            } else {
-                "Assistente de timbre"
-            };
-            if ui.button(label).clicked() && self.first_pass {
-                self.show_assistant = !self.show_assistant;
-            }
             ui.separator();
             let dot = if self.connected {
                 Color32::from_rgb(80, 200, 120)
@@ -735,17 +728,31 @@ impl eframe::App for App {
         egui::Panel::left("presets")
             .default_size(260.0)
             .show(ui, |ui| self.preset_list(ui));
-        if self.show_assistant {
-            let act = self.first_pass;
-            let actions = egui::Panel::right("assistant")
+        // Assistente recolhível: painel completo ou uma faixa fina com o botão de expandir.
+        // (Alternância explícita em vez de Panel::show_switched: a animação dele se perdia com as
+        // passadas extras que a centralização da placa pede ao egui.)
+        let act = self.first_pass;
+        let (actions, toggle) = if self.assistant_open {
+            egui::Panel::right("assistant")
                 .default_size(380.0)
+                .min_size(280.0)
                 .resizable(true)
                 .show(ui, |ui| self.assistant.ui(ui, self.current.as_ref(), act))
+                .inner
+        } else {
+            let expand = egui::Panel::right("assistant-collapsed")
+                .exact_size(44.0)
+                .resizable(false)
+                .show(ui, |ui| self.assistant.collapsed_ui(ui, act))
                 .inner;
-            for action in actions {
-                match action {
-                    assistant_panel::Action::Apply(blocks) => self.apply_proposal(blocks),
-                }
+            (Vec::new(), expand)
+        };
+        if toggle {
+            self.assistant_open = !self.assistant_open;
+        }
+        for action in actions {
+            match action {
+                assistant_panel::Action::Apply(blocks) => self.apply_proposal(blocks),
             }
         }
         egui::CentralPanel::default().show(ui, |ui| {

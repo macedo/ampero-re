@@ -49,6 +49,10 @@ pub struct AssistantPanel {
     activity: String,
     settings: Option<Config>,
     settings_status: String,
+    /// Painel recolhido (atualizado pela GUI a cada frame).
+    collapsed: bool,
+    /// Chegou resposta enquanto o painel estava recolhido.
+    unread: bool,
 }
 
 const SUGGESTIONS: [&str; 4] = [
@@ -103,11 +107,16 @@ impl AssistantPanel {
             activity: String::new(),
             settings: None,
             settings_status: String::new(),
+            collapsed: false,
+            unread: false,
         }
     }
 
     fn poll(&mut self) {
         while let Ok(evt) = self.rx.try_recv() {
+            if !matches!(evt, Evt::Activity(_)) && self.collapsed {
+                self.unread = true; // avisa na faixa recolhida que chegou resposta
+            }
             match evt {
                 Evt::Activity(a) => self.activity = a,
                 Evt::Reply(turn) => {
@@ -144,14 +153,56 @@ impl AssistantPanel {
         });
     }
 
+    /// Faixa fina do painel recolhido. Retorna true quando o usuário pede para expandir.
+    pub fn collapsed_ui(&mut self, ui: &mut egui::Ui, act: bool) -> bool {
+        self.collapsed = true;
+        self.poll();
+        let mut expand = false;
+        ui.vertical_centered(|ui| {
+            ui.add_space(4.0);
+            let button =
+                egui::Button::new(RichText::new("«").size(18.0)).min_size(egui::vec2(28.0, 28.0));
+            let resp = ui.add(button).on_hover_text("Abrir o assistente de timbre");
+            if resp.clicked() && act {
+                expand = true;
+            }
+            ui.label(RichText::new("IA").small().strong());
+            if self.busy {
+                ui.spinner();
+            }
+            if self.unread {
+                let (rect, _) =
+                    ui.allocate_exact_size(egui::vec2(10.0, 10.0), egui::Sense::hover());
+                ui.painter().circle_filled(rect.center(), 4.0, GOLD);
+                ui.label(RichText::new("nova\nresposta").small().color(GOLD));
+            }
+        });
+        expand
+    }
+
+    /// Painel expandido. Retorna as ações para o app e se o usuário pediu para recolher.
     /// `act` = false na passada descartada do egui (efeitos colaterais só na primeira).
-    pub fn ui(&mut self, ui: &mut egui::Ui, preset: Option<&Preset>, act: bool) -> Vec<Action> {
+    pub fn ui(
+        &mut self,
+        ui: &mut egui::Ui,
+        preset: Option<&Preset>,
+        act: bool,
+    ) -> (Vec<Action>, bool) {
+        self.collapsed = false;
+        self.unread = false;
         self.poll();
         let mut actions = Vec::new();
+        let mut collapse = false;
 
         ui.horizontal(|ui| {
             ui.label(RichText::new("Assistente de timbre").strong().size(16.0));
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                // na ponta direita: na esquerda ele ficaria sobre a alça de redimensionar do painel
+                let button = egui::Button::new(RichText::new("»").size(16.0));
+                let resp = ui.add(button).on_hover_text("Recolher o assistente");
+                if resp.clicked() && act {
+                    collapse = true;
+                }
                 if ui.button("Configurar").clicked() && act {
                     self.settings = Some(self.config.clone());
                     self.settings_status.clear();
@@ -255,7 +306,7 @@ impl AssistantPanel {
         });
 
         self.settings_window(ui.ctx(), act);
-        actions
+        (actions, collapse)
     }
 
     fn settings_window(&mut self, ctx: &egui::Context, act: bool) {
