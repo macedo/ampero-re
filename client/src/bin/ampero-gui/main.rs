@@ -34,6 +34,9 @@ struct App {
     activity: Option<(String, std::time::Instant)>,
     /// Blocos cujo liga/desliga foi feito na pedaleira (CTRL, footswitch): uso ao vivo, não conta como "não salvo".
     pedal_switched: [bool; 9],
+    /// Fotos e descrições do editor oficial, se instalado.
+    resources: Option<ampero::resources::Resources>,
+    textures: std::collections::HashMap<std::path::PathBuf, Option<egui::TextureHandle>>,
     /// O egui pode rodar `ui()` duas vezes no mesmo frame (multi-pass) com o mesmo input;
     /// efeitos colaterais só podem acontecer na primeira passada.
     first_pass: bool,
@@ -58,6 +61,8 @@ impl App {
             confirm_save: false,
             activity: None,
             pedal_switched: [false; 9],
+            resources: ampero::resources::Resources::locate(),
+            textures: Default::default(),
             first_pass: true,
         };
         app.worker.send(Cmd::Connect(app.port.clone()));
@@ -329,6 +334,88 @@ impl App {
         });
         ui.add_space(8.0);
 
+        let name = block.algorithm_name.clone();
+        ui.horizontal_top(|ui| {
+            self.effect_info(ui, module, name.as_deref());
+            ui.separator();
+            ui.vertical(|ui| self.param_grid(ui, k, module, block));
+        });
+    }
+
+    /// Foto + nome + descrição do efeito, como no editor oficial (lidos da instalação dele).
+    fn effect_info(&mut self, ui: &mut egui::Ui, module: &str, name: Option<&str>) {
+        const WIDTH: f32 = 250.0;
+        const IMAGE_MAX_H: f32 = 200.0;
+        let (image, description) = match (&self.resources, name) {
+            (Some(res), Some(n)) => (
+                res.image_path(module, n),
+                res.description(module, n).map(str::to_owned),
+            ),
+            _ => (None, None),
+        };
+        let texture = image.and_then(|p| self.texture(ui.ctx(), &p));
+        ui.vertical(|ui| {
+            ui.set_width(WIDTH);
+            if let Some(tex) = texture {
+                let size = tex.size_vec2();
+                let scale = (IMAGE_MAX_H / size.y).min(WIDTH / size.x).min(1.5);
+                ui.vertical_centered(|ui| ui.image((tex.id(), size * scale)));
+            }
+            if let Some(n) = name {
+                ui.label(RichText::new(n).strong().size(16.0));
+            }
+            match (&self.resources, description) {
+                (_, Some(text)) => {
+                    egui::ScrollArea::vertical()
+                        .id_salt("description")
+                        .max_height(240.0)
+                        .show(ui, |ui| ui.label(RichText::new(text).small()));
+                }
+                (Some(_), None) => {
+                    ui.label(
+                        RichText::new("Sem descrição para este efeito.")
+                            .small()
+                            .weak(),
+                    );
+                }
+                (None, None) => {
+                    ui.label(
+                        RichText::new(
+                            "Fotos e descrições vêm da instalação do Ampero Editor oficial. \
+                             Instale-o ou defina AMPERO_RESOURCES com a pasta Resource/Ampero.",
+                        )
+                        .small()
+                        .weak(),
+                    );
+                }
+            }
+        });
+    }
+
+    /// Carrega (uma vez) o PNG como textura do egui.
+    fn texture(
+        &mut self,
+        ctx: &egui::Context,
+        path: &std::path::Path,
+    ) -> Option<egui::TextureHandle> {
+        self.textures
+            .entry(path.to_path_buf())
+            .or_insert_with(|| {
+                let img = image::open(path).ok()?.to_rgba8();
+                let size = [img.width() as usize, img.height() as usize];
+                let color = egui::ColorImage::from_rgba_unmultiplied(size, img.as_raw());
+                Some(ctx.load_texture(path.to_string_lossy(), color, egui::TextureOptions::LINEAR))
+            })
+            .clone()
+    }
+
+    fn param_grid(
+        &mut self,
+        ui: &mut egui::Ui,
+        k: usize,
+        module: &str,
+        block: &mut ampero::preset::Block,
+    ) {
         let Some(meta) = params::algorithm(module, block.algorithm) else {
             ui.label("Sem metadados para este algoritmo (IR do usuário?). Valores brutos:");
             ui.label(format!("{:?}", block.params));

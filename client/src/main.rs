@@ -13,6 +13,7 @@ USO:
   ampero show P29-1                    lê um preset do banco de usuário
   ampero current                       lê o buffer de edição (preset atual)
   ampero diff                          compara o buffer de edição com o preset salvo (byte a byte)
+  ampero info MOD NOME                 foto e descrição de um efeito (lidas da instalação do editor oficial)
   ampero select P29-1                  seleciona preset (CC0 + Program Change)
   ampero set MOD PARAM VALOR           altera parâmetro no buffer de edição (ex.: set AMP 0 20)
   ampero decode-log LOG [--json ARQ]   decodifica presets de um log do proxy winmm (offline)
@@ -129,6 +130,29 @@ fn main() -> Result<()> {
             let pr = dev.read_edit_buffer()?;
             print!("{}", pr.summary());
             write_json(&a.json, &pr)?;
+        }
+        "info" => {
+            let [module, name] = a.pos.as_slice() else {
+                bail!("uso: ampero info MOD NOME")
+            };
+            let res = ampero::resources::Resources::locate().context(
+                "pasta Resource/Ampero do editor oficial não encontrada (defina AMPERO_RESOURCES)",
+            )?;
+            println!(
+                "recursos: {} ({} descrições)",
+                res.root.display(),
+                res.description_count()
+            );
+            println!(
+                "foto: {}",
+                res.image_path(module, name)
+                    .map_or("—".into(), |p| p.display().to_string())
+            );
+            println!(
+                "
+{}",
+                res.description(module, name).unwrap_or("(sem descrição)")
+            );
         }
         "diff" => {
             let mut dev = Device::open(&a.port)?;

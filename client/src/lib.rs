@@ -5,3 +5,4 @@ pub mod logfile;
 pub mod params;
 pub mod preset;
 pub mod protocol;
+pub mod resources;

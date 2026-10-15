@@ -22,6 +22,10 @@ egui/eframe, um binário nativo por SO. Ao abrir, conecta e sincroniza sozinha (
 - Cadeia de sinal na ordem real do preset, com botão ON/OFF por bloco (CC 48+bloco).
 - Editor do bloco selecionado: troca de algoritmo e todos os parâmetros, com nomes, faixas, unidades e opções
   vindos de `assets/params.json`.
+- Ao selecionar um efeito, aparecem a foto e a descrição dele, como no editor oficial. Elas são lidas em tempo de
+  execução da instalação do Ampero Editor (não são redistribuídas aqui). A pasta é detectada sozinha no Windows
+  (`Program FilesHotoneAmpero Editor`) e no macOS (`/Applications`); em outros casos, defina
+  `AMPERO_RESOURCES` com o caminho da pasta `Resource/Ampero`. Sem ela, a GUI funciona normalmente, só sem fotos.
 - Edições vão ao vivo para o buffer de edição. "não salvo" aparece quando o buffer difere do preset gravado.
   Liga/desliga feito pela pedaleira (CTRL, footswitch) é uso ao vivo e não conta como edição.
 - Salvar (só no banco de usuário) pede confirmação.
@@ -48,6 +52,7 @@ ampero set AMP 0 20                # Gain do AMP = 20 (só no buffer de edição
 ampero decode-log LOG --json x     # decodifica um log do proxy winmm, sem aparelho
 ampero monitor 60                  # mostra tudo que a pedaleira envia por 60 s
 ampero diff                        # buffer de edição vs preset salvo, byte a byte
+ampero info AMP "Marshell 800"     # foto e descrição de um efeito (da instalação oficial)
 ```
 
 ## Desempenho (Windows, Ampero via USB, 2026-10-15)
