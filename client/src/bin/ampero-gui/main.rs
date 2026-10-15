@@ -3,6 +3,7 @@
 
 //! Editor gráfico multiplataforma para o Hotone Ampero (egui/eframe).
 
+mod assistant_panel;
 mod widgets;
 mod worker;
 
@@ -14,7 +15,8 @@ use worker::{Cmd, Evt, Worker};
 fn main() -> eframe::Result<()> {
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
-            .with_inner_size([1180.0, 720.0])
+            .with_inner_size([1440.0, 860.0])
+            .with_maximized(true) // três colunas (presets, editor, assistente) pedem espaço
             .with_title("Ampero"),
         ..Default::default()
     };
@@ -44,6 +46,9 @@ struct App {
     /// O egui pode rodar `ui()` duas vezes no mesmo frame (multi-pass) com o mesmo input;
     /// efeitos colaterais só podem acontecer na primeira passada.
     first_pass: bool,
+    /// Painel do assistente de timbre (IA).
+    assistant: assistant_panel::AssistantPanel,
+    show_assistant: bool,
 }
 
 impl App {
@@ -68,10 +73,61 @@ impl App {
             resources: ampero::resources::Resources::locate(),
             textures: Default::default(),
             first_pass: true,
+            assistant: assistant_panel::AssistantPanel::new(&cc.egui_ctx),
+            show_assistant: true,
         };
         app.worker.send(Cmd::Connect(app.port.clone()));
         app.worker.send(Cmd::Sync);
         app
+    }
+
+    /// Aplica uma proposta do assistente no buffer de edição: troca algoritmos, liga/desliga blocos e
+    /// ajusta parâmetros; no fim relê o buffer para a tela mostrar o estado real. Nada é salvo.
+    fn apply_proposal(&mut self, blocks: Vec<ampero::assistant::ResolvedBlock>) {
+        let Some(cur) = self.current.as_ref() else {
+            self.status = "Conecte a pedaleira para aplicar a proposta".into();
+            return;
+        };
+        let mut cmds = Vec::new();
+        for b in &blocks {
+            let Some(now) = cur.blocks.get(b.block) else {
+                continue;
+            };
+            if now.algorithm != b.algorithm {
+                cmds.push(Cmd::SetAlgorithm {
+                    block: b.block,
+                    alg: b.algorithm,
+                });
+            }
+            if now.on != b.on {
+                cmds.push(Cmd::Switch {
+                    block: b.block,
+                    on: b.on,
+                });
+            }
+            for &(param, value) in &b.params {
+                cmds.push(Cmd::SetParam {
+                    block: b.block,
+                    alg: b.algorithm,
+                    param,
+                    value,
+                });
+            }
+        }
+        for b in &blocks {
+            self.pedal_switched[b.block] = false; // mudanças vindas da GUI contam como edição
+        }
+        if let Some(first) = blocks.first() {
+            self.selected_block = first.block;
+        }
+        for cmd in cmds {
+            self.send(cmd);
+        }
+        self.send(Cmd::ReadCurrent);
+        self.status = format!(
+            "Proposta aplicada em {} bloco(s) — salve para manter",
+            blocks.len()
+        );
     }
 
     fn send(&self, cmd: Cmd) {
@@ -184,6 +240,14 @@ impl App {
                     self.send(Cmd::ReadCurrent);
                 }
             });
+            let label = if self.show_assistant {
+                "Ocultar assistente"
+            } else {
+                "Assistente de timbre"
+            };
+            if ui.button(label).clicked() && self.first_pass {
+                self.show_assistant = !self.show_assistant;
+            }
             ui.separator();
             let dot = if self.connected {
                 Color32::from_rgb(80, 200, 120)
@@ -671,6 +735,19 @@ impl eframe::App for App {
         egui::Panel::left("presets")
             .default_size(260.0)
             .show(ui, |ui| self.preset_list(ui));
+        if self.show_assistant {
+            let act = self.first_pass;
+            let actions = egui::Panel::right("assistant")
+                .default_size(380.0)
+                .resizable(true)
+                .show(ui, |ui| self.assistant.ui(ui, self.current.as_ref(), act))
+                .inner;
+            for action in actions {
+                match action {
+                    assistant_panel::Action::Apply(blocks) => self.apply_proposal(blocks),
+                }
+            }
+        }
         egui::CentralPanel::default().show(ui, |ui| {
             let Some(mut cur) = self.current.take() else {
                 ui.centered_and_justified(|ui| {
