@@ -20,7 +20,8 @@ egui/eframe, um binário nativo por SO. Ao abrir, conecta e sincroniza sozinha (
 
 - Lista de presets (User / Factory) com busca. Clicar seleciona o preset no aparelho.
 - Cadeia de sinal na ordem real do preset, numa faixa horizontal de cards: tipo do bloco e botão ON/OFF
-  (CC 48+bloco) em cima, miniatura do efeito no meio (esmaecida quando desligado) e nome embaixo.
+  (CC 48+bloco) em cima, miniatura do efeito no meio (esmaecida quando desligado) e nome embaixo. Quando não
+  cabe, a roda do mouse sobre a faixa rola os pedais na horizontal.
 - Editor do bloco selecionado: troca de algoritmo e painel híbrido de parâmetros (nomes, faixas e opções vindos de
   `assets/params.json`):
   - controles numa placa centralizada (na horizontal e na vertical) ao lado da foto; os knobs crescem quando são

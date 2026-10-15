@@ -307,97 +307,126 @@ impl App {
     fn chain(&mut self, ui: &mut egui::Ui, cur: &mut Preset) {
         const CARD_W: f32 = 92.0;
         const THUMB_H: f32 = 64.0;
-        egui::ScrollArea::horizontal()
+        // A roda do mouse (vertical) rola a faixa na horizontal quando o cursor está sobre ela —
+        // o egui só faz isso com Shift. Usa o retângulo/limite medidos no frame anterior e força o
+        // offset antes de desenhar. Só na primeira passada para não aplicar o delta duas vezes.
+        let memory = ui.id().with("chain-scroll-memory");
+        let mut area = egui::ScrollArea::horizontal()
             .id_salt("chain")
-            .show(ui, |ui| {
-                ui.horizontal(|ui| {
-                    for name in cur.chain.clone() {
-                        let k = MODULES.iter().position(|m| *m == name).unwrap_or(0);
-                        let block = &mut cur.blocks[k];
-                        let thumb = match (&self.resources, block.algorithm_name.as_deref()) {
-                            (Some(res), Some(n)) => res.image_path(block.module, n),
-                            _ => None,
-                        }
-                        .and_then(|p| self.texture(ui.ctx(), &p));
+            .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::VisibleWhenNeeded);
+        let previous: Option<(egui::Id, egui::Rect, f32)> = ui.data(|d| d.get_temp(memory));
+        if let Some((area_id, rect, overflow)) = previous
+            && self.first_pass
+            && overflow > 0.0
+            && ui.rect_contains_pointer(rect)
+        {
+            let (wheel, shift) = ui.input(|i| (i.smooth_scroll_delta.y, i.modifiers.shift));
+            if wheel != 0.0 && !shift {
+                let now =
+                    egui::scroll_area::State::load(ui.ctx(), area_id).map_or(0.0, |s| s.offset.x);
+                area = area.horizontal_scroll_offset((now - wheel).clamp(0.0, overflow));
+            }
+        }
+        let out = area.show(ui, |ui| {
+            ui.horizontal(|ui| {
+                for name in cur.chain.clone() {
+                    let k = MODULES.iter().position(|m| *m == name).unwrap_or(0);
+                    let block = &mut cur.blocks[k];
+                    let thumb = match (&self.resources, block.algorithm_name.as_deref()) {
+                        (Some(res), Some(n)) => res.image_path(block.module, n),
+                        _ => None,
+                    }
+                    .and_then(|p| self.texture(ui.ctx(), &p));
 
-                        let fill = if block.on {
-                            Color32::from_rgb(70, 55, 20)
-                        } else {
-                            Color32::from_gray(35)
-                        };
-                        let stroke = if self.selected_block == k {
-                            Color32::from_rgb(230, 180, 60)
-                        } else {
-                            Color32::from_gray(70)
-                        };
-                        egui::Frame::new()
-                            .fill(fill)
-                            .stroke(egui::Stroke::new(1.5, stroke))
-                            .corner_radius(6.0)
-                            .inner_margin(6.0)
-                            .show(ui, |ui| {
-                                ui.set_width(CARD_W);
-                                ui.vertical(|ui| {
-                                    // topo: tipo do bloco + ON/OFF
-                                    ui.horizontal(|ui| {
-                                        ui.add_sized(
-                                            [CARD_W - 42.0, 18.0],
-                                            egui::Label::new(RichText::new(block.module).strong()),
-                                        );
-                                        let (text, color) = if block.on {
-                                            ("ON", Color32::from_rgb(240, 190, 70))
-                                        } else {
-                                            ("OFF", Color32::from_gray(140))
-                                        };
-                                        let toggle = egui::Button::new(
-                                            RichText::new(text).small().strong().color(color),
-                                        );
-                                        if ui.add_sized([34.0, 18.0], toggle).clicked()
-                                            && self.first_pass
-                                        {
-                                            block.on = !block.on;
-                                            self.pedal_switched[k] = false; // alternado pela GUI: é edição
-                                            self.send(Cmd::Switch {
-                                                block: k,
-                                                on: block.on,
-                                            });
-                                        }
-                                    });
-                                    // meio: miniatura (clicar seleciona o bloco)
-                                    let picture = match &thumb {
-                                        Some(tex) => {
-                                            let size = tex.size_vec2();
-                                            let scale = (THUMB_H / size.y).min(CARD_W / size.x);
-                                            let img = egui::Image::new((tex.id(), size * scale));
-                                            let img = if block.on {
-                                                img
-                                            } else {
-                                                img.tint(Color32::from_gray(110))
-                                            };
-                                            egui::Button::image(img).frame(false)
-                                        }
-                                        None => egui::Button::new(
-                                            RichText::new(block.module).size(20.0).weak(),
-                                        )
-                                        .frame(false),
+                    let fill = if block.on {
+                        Color32::from_rgb(70, 55, 20)
+                    } else {
+                        Color32::from_gray(35)
+                    };
+                    let stroke = if self.selected_block == k {
+                        Color32::from_rgb(230, 180, 60)
+                    } else {
+                        Color32::from_gray(70)
+                    };
+                    egui::Frame::new()
+                        .fill(fill)
+                        .stroke(egui::Stroke::new(1.5, stroke))
+                        .corner_radius(6.0)
+                        .inner_margin(6.0)
+                        .show(ui, |ui| {
+                            ui.set_width(CARD_W);
+                            ui.vertical(|ui| {
+                                // topo: tipo do bloco + ON/OFF
+                                ui.horizontal(|ui| {
+                                    ui.add_sized(
+                                        [CARD_W - 42.0, 18.0],
+                                        egui::Label::new(RichText::new(block.module).strong()),
+                                    );
+                                    let (text, color) = if block.on {
+                                        ("ON", Color32::from_rgb(240, 190, 70))
+                                    } else {
+                                        ("OFF", Color32::from_gray(140))
                                     };
-                                    let clicked_picture =
-                                        ui.add_sized([CARD_W, THUMB_H], picture).clicked();
-                                    // embaixo: nome do efeito
-                                    let label = block.algorithm_name.as_deref().unwrap_or("?");
-                                    let select = egui::Button::new(RichText::new(label).small())
-                                        .frame(false)
-                                        .truncate();
-                                    let clicked_name =
-                                        ui.add_sized([CARD_W, 16.0], select).clicked();
-                                    if clicked_picture || clicked_name {
-                                        self.selected_block = k;
+                                    let toggle = egui::Button::new(
+                                        RichText::new(text).small().strong().color(color),
+                                    );
+                                    if ui.add_sized([34.0, 18.0], toggle).clicked()
+                                        && self.first_pass
+                                    {
+                                        block.on = !block.on;
+                                        self.pedal_switched[k] = false; // alternado pela GUI: é edição
+                                        self.send(Cmd::Switch {
+                                            block: k,
+                                            on: block.on,
+                                        });
                                     }
                                 });
+                                // meio: miniatura (clicar seleciona o bloco)
+                                let picture = match &thumb {
+                                    Some(tex) => {
+                                        let size = tex.size_vec2();
+                                        let scale = (THUMB_H / size.y).min(CARD_W / size.x);
+                                        let img = egui::Image::new((tex.id(), size * scale));
+                                        let img = if block.on {
+                                            img
+                                        } else {
+                                            img.tint(Color32::from_gray(110))
+                                        };
+                                        egui::Button::image(img).frame(false)
+                                    }
+                                    None => egui::Button::new(
+                                        RichText::new(block.module).size(20.0).weak(),
+                                    )
+                                    .frame(false),
+                                };
+                                let clicked_picture =
+                                    ui.add_sized([CARD_W, THUMB_H], picture).clicked();
+                                // embaixo: nome do efeito
+                                let label = block.algorithm_name.as_deref().unwrap_or("?");
+                                let select = egui::Button::new(RichText::new(label).small())
+                                    .frame(false)
+                                    .truncate();
+                                let clicked_name = ui.add_sized([CARD_W, 16.0], select).clicked();
+                                if clicked_picture || clicked_name {
+                                    self.selected_block = k;
+                                }
                             });
-                    }
-                });
+                        });
+                }
             });
+        });
+
+        let overflow = out.content_size.x - out.inner_rect.width();
+        // só a faixa dos cards (o inner_rect da ScrollArea pode ir até o fim do painel, e aí a roda
+        // sobre os knobs também rolaria os pedais)
+        let strip = egui::Rect::from_min_size(
+            out.inner_rect.min,
+            egui::vec2(
+                out.inner_rect.width(),
+                out.content_size.y.min(out.inner_rect.height()),
+            ),
+        );
+        ui.data_mut(|d| d.insert_temp(memory, (out.id, strip, overflow)));
     }
 
     fn block_editor(&mut self, ui: &mut egui::Ui, cur: &mut Preset) {
