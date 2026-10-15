@@ -1,5 +1,6 @@
 //! Editor gráfico multiplataforma para o Hotone Ampero (egui/eframe).
 
+mod widgets;
 mod worker;
 
 use ampero::params::{self, Kind};
@@ -366,11 +367,19 @@ impl App {
         });
         ui.add_space(8.0);
 
+        // valores salvos do mesmo bloco (para marcar o que mudou), se o algoritmo for o mesmo
+        let saved: Option<Vec<u16>> = self
+            .presets
+            .iter()
+            .find(|p| p.index == cur.index)
+            .map(|p| &p.blocks[k])
+            .filter(|b| b.algorithm == block.algorithm)
+            .map(|b| b.params.clone());
         let name = block.algorithm_name.clone();
         ui.horizontal_top(|ui| {
             self.effect_info(ui, module, name.as_deref());
             ui.separator();
-            ui.vertical(|ui| self.param_grid(ui, k, module, block));
+            ui.vertical(|ui| self.param_grid(ui, k, module, block, saved.as_deref()));
         });
     }
 
@@ -441,12 +450,15 @@ impl App {
             .clone()
     }
 
+    /// Painel híbrido: knobs para contínuos, faders para bandas de EQ, botões segmentados para
+    /// opções curtas e on/off (dropdown só para listas longas), campos numéricos para posições.
     fn param_grid(
         &mut self,
         ui: &mut egui::Ui,
         k: usize,
         module: &str,
         block: &mut ampero::preset::Block,
+        saved: Option<&[u16]>,
     ) {
         let Some(meta) = params::algorithm(module, block.algorithm) else {
             ui.label("Sem metadados para este algoritmo (IR do usuário?). Valores brutos:");
@@ -454,59 +466,109 @@ impl App {
             return;
         };
         let alg = block.algorithm;
-        egui::Grid::new("params")
-            .num_columns(2)
-            .spacing([16.0, 10.0])
-            .show(ui, |ui| {
-                for pm in &meta.params {
+        let act = self.first_pass;
+        let saved_of = |i: usize| saved.and_then(|s| s.get(i).copied());
+        let mut changes: Vec<(usize, u16)> = Vec::new();
+        let params_of = |kinds: &[Kind]| {
+            meta.params
+                .iter()
+                .filter(|p| kinds.contains(&p.kind))
+                .collect::<Vec<_>>()
+        };
+
+        let knobs = params_of(&[Kind::Knob]);
+        if !knobs.is_empty() {
+            ui.horizontal_wrapped(|ui| {
+                for pm in knobs {
                     let Some(value) = block.params.get_mut(pm.index) else {
                         continue;
                     };
-                    ui.label(&pm.name);
-                    let before = *value;
-                    match pm.kind {
-                        Kind::Combox => {
-                            let text = pm
-                                .options
-                                .get(*value as usize)
-                                .cloned()
-                                .unwrap_or_else(|| value.to_string());
-                            egui::ComboBox::from_id_salt(("combo", pm.index))
-                                .selected_text(text)
-                                .show_ui(ui, |ui| {
-                                    for (i, opt) in pm.options.iter().enumerate() {
-                                        ui.selectable_value(value, i as u16, opt);
-                                    }
-                                });
-                        }
-                        Kind::Switch => {
-                            let mut on = *value != 0;
-                            if ui.checkbox(&mut on, "").changed() && self.first_pass {
-                                *value = on as u16;
-                            }
-                        }
-                        _ => {
-                            let pm2 = pm.clone();
-                            ui.add(
-                                egui::Slider::new(value, pm.range())
-                                    .custom_formatter(move |n, _| {
-                                        format!("{:.0}", pm2.display(n as u16))
-                                    })
-                                    .clamping(egui::SliderClamping::Always),
-                            );
-                        }
+                    if widgets::knob(ui, value, pm, saved_of(pm.index), act).changed() {
+                        changes.push((pm.index, *value));
                     }
-                    if *value != before {
-                        self.send(Cmd::SetParam {
-                            block: k,
-                            alg,
-                            param: pm.index as u8,
-                            value: *value,
-                        });
-                    }
-                    ui.end_row();
                 }
             });
+        }
+
+        let faders = params_of(&[Kind::Slider]);
+        if !faders.is_empty() {
+            ui.add_space(6.0);
+            let faders: Vec<_> = faders
+                .into_iter()
+                .filter(|pm| pm.index < block.params.len())
+                .collect();
+            let mut values: Vec<u16> = faders.iter().map(|pm| block.params[pm.index]).collect();
+            let saved: Vec<Option<u16>> = faders.iter().map(|pm| saved_of(pm.index)).collect();
+            for i in widgets::fader_bank(ui, &faders, &mut values, &saved, act) {
+                block.params[faders[i].index] = values[i];
+                changes.push((faders[i].index, values[i]));
+            }
+        }
+
+        let options = params_of(&[Kind::Combox, Kind::Switch, Kind::Texteditor]);
+        if !options.is_empty() {
+            ui.add_space(10.0);
+            egui::Grid::new("options")
+                .num_columns(2)
+                .spacing([14.0, 8.0])
+                .show(ui, |ui| {
+                    for pm in options {
+                        let Some(value) = block.params.get_mut(pm.index) else {
+                            continue;
+                        };
+                        let marker = if saved_of(pm.index).is_some_and(|s| s != *value) {
+                            " •"
+                        } else {
+                            ""
+                        };
+                        ui.label(
+                            RichText::new(format!("{}{marker}", pm.name))
+                                .color(ui.visuals().weak_text_color()),
+                        );
+                        let before = *value;
+                        match pm.kind {
+                            Kind::Switch => {
+                                widgets::segmented(ui, value, &["Off", "On"], act);
+                            }
+                            Kind::Combox if pm.options.len() <= 6 => {
+                                let opts: Vec<&str> =
+                                    pm.options.iter().map(String::as_str).collect();
+                                widgets::segmented(ui, value, &opts, act);
+                            }
+                            Kind::Combox => {
+                                let text = pm
+                                    .options
+                                    .get(*value as usize)
+                                    .cloned()
+                                    .unwrap_or_else(|| value.to_string());
+                                egui::ComboBox::from_id_salt(("combo", pm.index))
+                                    .selected_text(text)
+                                    .show_ui(ui, |ui| {
+                                        for (i, opt) in pm.options.iter().enumerate() {
+                                            ui.selectable_value(value, i as u16, opt);
+                                        }
+                                    });
+                            }
+                            _ => {
+                                ui.add(egui::DragValue::new(value).range(pm.range()));
+                            }
+                        }
+                        if *value != before {
+                            changes.push((pm.index, *value));
+                        }
+                        ui.end_row();
+                    }
+                });
+        }
+
+        for (param, value) in changes {
+            self.send(Cmd::SetParam {
+                block: k,
+                alg,
+                param: param as u8,
+                value,
+            });
+        }
     }
 
     fn header(&mut self, ui: &mut egui::Ui, cur: &Preset) {

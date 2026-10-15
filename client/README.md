@@ -21,8 +21,16 @@ egui/eframe, um binário nativo por SO. Ao abrir, conecta e sincroniza sozinha (
 - Lista de presets (User / Factory) com busca. Clicar seleciona o preset no aparelho.
 - Cadeia de sinal na ordem real do preset, numa faixa horizontal de cards: tipo do bloco e botão ON/OFF
   (CC 48+bloco) em cima, miniatura do efeito no meio (esmaecida quando desligado) e nome embaixo.
-- Editor do bloco selecionado: troca de algoritmo e todos os parâmetros, com nomes, faixas, unidades e opções
-  vindos de `assets/params.json`.
+- Editor do bloco selecionado: troca de algoritmo e painel híbrido de parâmetros (nomes, faixas e opções vindos de
+  `assets/params.json`):
+  - knobs para contínuos: arrastar na vertical (Shift = ajuste fino), scroll, duplo clique volta ao padrão do efeito,
+    clique no número para digitar o valor na unidade exibida (ex.: `856 ms`, `1.2k`, `+6`; Enter confirma, Esc cancela);
+    o arco mostra o valor e um ponto na borda marca o padrão;
+  - faders verticais para as bandas de EQ, com linhas horizontais de referência (+50/+25/0/−25/−50): arrasto
+    relativo em meia velocidade (Shift = 5× mais fino), scroll ou setas ↑/↓ de 1 em 1, duplo clique = padrão,
+    clique no número para digitar;
+  - botões segmentados para opções de até 6 itens e para on/off (listas longas, como Mic Type, ficam em dropdown);
+  - valores com unidade real (ms, Hz/kHz, dB, semitons) e um ponto dourado quando difere do preset salvo.
 - Ao selecionar um efeito, aparecem a foto e a descrição dele, como no editor oficial. Elas são lidas em tempo de
   execução da instalação do Ampero Editor (não são redistribuídas aqui). A pasta é detectada sozinha no Windows
   (`Program FilesHotoneAmpero Editor`) e no macOS (`/Applications`); em outros casos, defina
