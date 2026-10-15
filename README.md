@@ -2,12 +2,15 @@
 
 Engenharia reversa do protocolo USB-MIDI do **Hotone Ampero** e um editor multiplataforma mais rápido que o oficial.
 
+Baixe a versão mais recente em [Releases](https://github.com/macedo/ampero-re/releases) (Windows, Linux e macOS).
+
 | Pasta / arquivo | Conteúdo |
 |---|---|
 | [`PROTOCOLO.md`](PROTOCOLO.md) | documentação do protocolo: frames SysEx, checksums, comandos e estrutura do preset |
 | [`client/`](client/) | cliente em Rust: CLI `ampero` e GUI `ampero-gui` (egui) para Windows, macOS e Linux |
 | [`proxy/`](proxy/) | proxy `winmm.dll` (Windows, 32 bits) que registra todo o tráfego MIDI do editor oficial |
 | [`tools/`](tools/) | scripts de análise: extração/decodificação de presets dos logs e geração de `params.json` |
+| [`RELEASING.md`](RELEASING.md) | fluxo de PRs e como lançar uma versão (tag → release com pacotes para download) |
 
 ## Capturar tráfego do editor oficial (Windows)
 

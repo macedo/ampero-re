@@ -1,3 +1,6 @@
+// Em release no Windows a GUI não abre uma janela de console junto.
+#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+
 //! Editor gráfico multiplataforma para o Hotone Ampero (egui/eframe).
 
 mod widgets;
