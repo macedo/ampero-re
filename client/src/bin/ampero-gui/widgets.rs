@@ -157,10 +157,14 @@ pub fn knob(
     pm: &ParamMeta,
     saved: Option<u16>,
     act: bool,
+    scale: f32,
 ) -> Response {
-    const W: f32 = 74.0;
-    const R: f32 = 24.0;
-    let (rect, mut resp) = ui.allocate_exact_size(Vec2::new(W, 96.0), Sense::click_and_drag());
+    let w: f32 = 74.0 * scale;
+    let r: f32 = 24.0 * scale;
+    let name_y = 20.0 + 2.0 * r; // relativo ao topo
+    let value_y = name_y + 16.0;
+    let (rect, mut resp) =
+        ui.allocate_exact_size(Vec2::new(w, value_y + 12.0), Sense::click_and_drag());
     let range = pm.range();
     let (lo, hi) = (*range.start() as f32, *range.end() as f32);
     let span = (hi - lo).max(1.0);
@@ -196,14 +200,14 @@ pub fn knob(
     }
 
     let painter = ui.painter_at(rect);
-    let center = Pos2::new(rect.center().x, rect.top() + 6.0 + R + 4.0);
+    let center = Pos2::new(rect.center().x, rect.top() + 10.0 + r);
     let frac = |v: f32| ((v - lo) / span).clamp(0.0, 1.0);
     let angle = |f: f32| (135.0 + 270.0 * f) * PI / 180.0;
-    let at = |a: f32, r: f32| center + Vec2::new(a.cos(), a.sin()) * r;
-    let arc = |from: f32, to: f32, r: f32| -> Vec<Pos2> {
+    let at = |a: f32, rad: f32| center + Vec2::new(a.cos(), a.sin()) * rad;
+    let arc = |from: f32, to: f32, rad: f32| -> Vec<Pos2> {
         let n = ((to - from).abs() * 24.0).ceil().max(2.0) as usize;
         (0..=n)
-            .map(|i| at(angle(from + (to - from) * i as f32 / n as f32), r))
+            .map(|i| at(angle(from + (to - from) * i as f32 / n as f32), rad))
             .collect()
     };
     let track = ui
@@ -213,29 +217,35 @@ pub fn knob(
         .bg_stroke
         .color
         .gamma_multiply(2.0);
-    painter.add(egui::Shape::line(arc(0.0, 1.0, R), Stroke::new(4.0, track)));
+    painter.add(egui::Shape::line(
+        arc(0.0, 1.0, r),
+        Stroke::new(4.0 * scale.sqrt(), track),
+    ));
     let f = frac(*value as f32);
     if f > 0.0 {
-        painter.add(egui::Shape::line(arc(0.0, f, R), Stroke::new(4.0, GOLD)));
+        painter.add(egui::Shape::line(
+            arc(0.0, f, r),
+            Stroke::new(4.0 * scale.sqrt(), GOLD),
+        ));
     }
     let knob_fill = if resp.hovered() || resp.dragged() {
         ui.visuals().widgets.hovered.bg_fill
     } else {
         ui.visuals().widgets.inactive.bg_fill
     };
-    painter.circle(center, R - 8.0, knob_fill, Stroke::new(1.0, track));
+    painter.circle(center, r * 0.67, knob_fill, Stroke::new(1.0, track));
     painter.line_segment(
-        [center, at(angle(f), R - 10.0)],
+        [center, at(angle(f), r * 0.58)],
         Stroke::new(2.5, ui.visuals().strong_text_color()),
     );
     // marca do valor padrão na borda
     painter.circle_filled(
-        at(angle(frac(pm.default as f32)), R + 6.0),
+        at(angle(frac(pm.default as f32)), r + 6.0),
         1.8,
         ui.visuals().weak_text_color(),
     );
     painter.text(
-        Pos2::new(rect.center().x, rect.top() + 68.0),
+        Pos2::new(rect.center().x, rect.top() + name_y),
         egui::Align2::CENTER_CENTER,
         &pm.name,
         egui::FontId::proportional(12.5),
@@ -243,14 +253,18 @@ pub fn knob(
     );
 
     let value_rect = egui::Rect::from_center_size(
-        Pos2::new(rect.center().x, rect.top() + 84.0),
-        Vec2::new(W - 12.0, 18.0),
+        Pos2::new(rect.center().x, rect.top() + value_y),
+        Vec2::new(w - 12.0, 18.0),
     );
     if inline_value(ui, id, value_rect, value, pm, act) {
         resp.mark_changed();
     }
     if saved.is_some_and(|s| s != *value) {
-        painter.circle_filled(Pos2::new(rect.right() - 4.0, rect.top() + 84.0), 3.0, GOLD);
+        painter.circle_filled(
+            Pos2::new(rect.right() - 4.0, rect.top() + value_y),
+            3.0,
+            GOLD,
+        );
     }
     resp.on_hover_text(format!(
         "{}: {}\npadrão {} · arraste (Shift = fino), scroll ou duplo clique para o padrão\nclique no número para digitar o valor",
@@ -423,6 +437,35 @@ pub fn fader_bank(
         }
     }
     changed
+}
+
+/// Desenha `add` centralizado na horizontal. Usa a largura medida no frame anterior; se ela mudou,
+/// pede uma passada extra ao egui (request_discard) para não aparecer deslocado.
+pub fn centered_row<R>(ui: &mut egui::Ui, id: egui::Id, add: impl FnOnce(&mut egui::Ui) -> R) -> R {
+    let width_id = id.with("centered-width");
+    let last: f32 = ui.data(|d| d.get_temp(width_id)).unwrap_or(0.0);
+    let pad = ((ui.available_width() - last) / 2.0).max(0.0);
+    let (inner, width) = ui
+        .horizontal(|ui| {
+            ui.add_space(pad);
+            let r = ui.scope(add);
+            (r.inner, r.response.rect.width())
+        })
+        .inner;
+    if (width - last).abs() > 0.5 {
+        ui.data_mut(|d| d.insert_temp(width_id, width));
+        ui.ctx().request_discard("centralizar controles");
+    }
+    inner
+}
+
+/// Escala dos knobs conforme a quantidade: poucos ficam grandes, muitos ficam compactos.
+pub fn knob_scale(count: usize) -> f32 {
+    match count {
+        0..=3 => 1.35,
+        4..=6 => 1.1,
+        _ => 0.9,
+    }
 }
 
 /// Botões segmentados (opções curtas e on/off). Retorna true se o valor mudou.

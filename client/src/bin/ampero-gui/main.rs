@@ -377,14 +377,14 @@ impl App {
             .map(|b| b.params.clone());
         let name = block.algorithm_name.clone();
         ui.horizontal_top(|ui| {
-            self.effect_info(ui, module, name.as_deref());
+            let left_h = self.effect_info(ui, module, name.as_deref());
             ui.separator();
-            ui.vertical(|ui| self.param_grid(ui, k, module, block, saved.as_deref()));
+            ui.vertical(|ui| self.param_grid(ui, k, module, block, saved.as_deref(), left_h));
         });
     }
 
     /// Foto + nome + descrição do efeito, como no editor oficial (lidos da instalação dele).
-    fn effect_info(&mut self, ui: &mut egui::Ui, module: &str, name: Option<&str>) {
+    fn effect_info(&mut self, ui: &mut egui::Ui, module: &str, name: Option<&str>) -> f32 {
         const WIDTH: f32 = 290.0;
         const IMAGE_MAX_H: f32 = 200.0;
         let (image, description) = match (&self.resources, name) {
@@ -430,7 +430,10 @@ impl App {
                     );
                 }
             }
-        });
+        })
+        .response
+        .rect
+        .height()
     }
 
     /// Carrega (uma vez) o PNG como textura do egui.
@@ -450,8 +453,9 @@ impl App {
             .clone()
     }
 
-    /// Painel híbrido: knobs para contínuos, faders para bandas de EQ, botões segmentados para
-    /// opções curtas e on/off (dropdown só para listas longas), campos numéricos para posições.
+    /// Painel híbrido numa "placa" centralizada: knobs para contínuos (maiores quando são poucos),
+    /// faders para bandas de EQ, botões segmentados para opções curtas e on/off (dropdown só para
+    /// listas longas), campos numéricos para posições. `min_h` = altura da coluna da foto/descrição.
     fn param_grid(
         &mut self,
         ui: &mut egui::Ui,
@@ -459,6 +463,7 @@ impl App {
         module: &str,
         block: &mut ampero::preset::Block,
         saved: Option<&[u16]>,
+        min_h: f32,
     ) {
         let Some(meta) = params::algorithm(module, block.algorithm) else {
             ui.label("Sem metadados para este algoritmo (IR do usuário?). Valores brutos:");
@@ -472,94 +477,137 @@ impl App {
         let params_of = |kinds: &[Kind]| {
             meta.params
                 .iter()
-                .filter(|p| kinds.contains(&p.kind))
+                .filter(|p| kinds.contains(&p.kind) && p.index < block.params.len())
                 .collect::<Vec<_>>()
         };
-
         let knobs = params_of(&[Kind::Knob]);
-        if !knobs.is_empty() {
-            ui.horizontal_wrapped(|ui| {
-                for pm in knobs {
-                    let Some(value) = block.params.get_mut(pm.index) else {
-                        continue;
-                    };
-                    if widgets::knob(ui, value, pm, saved_of(pm.index), act).changed() {
-                        changes.push((pm.index, *value));
-                    }
-                }
-            });
-        }
-
         let faders = params_of(&[Kind::Slider]);
-        if !faders.is_empty() {
-            ui.add_space(6.0);
-            let faders: Vec<_> = faders
-                .into_iter()
-                .filter(|pm| pm.index < block.params.len())
-                .collect();
-            let mut values: Vec<u16> = faders.iter().map(|pm| block.params[pm.index]).collect();
-            let saved: Vec<Option<u16>> = faders.iter().map(|pm| saved_of(pm.index)).collect();
-            for i in widgets::fader_bank(ui, &faders, &mut values, &saved, act) {
-                block.params[faders[i].index] = values[i];
-                changes.push((faders[i].index, values[i]));
-            }
-        }
-
         let options = params_of(&[Kind::Combox, Kind::Switch, Kind::Texteditor]);
-        if !options.is_empty() {
-            ui.add_space(10.0);
-            egui::Grid::new("options")
-                .num_columns(2)
-                .spacing([14.0, 8.0])
-                .show(ui, |ui| {
-                    for pm in options {
-                        let Some(value) = block.params.get_mut(pm.index) else {
-                            continue;
-                        };
-                        let marker = if saved_of(pm.index).is_some_and(|s| s != *value) {
-                            " •"
-                        } else {
-                            ""
-                        };
-                        ui.label(
-                            RichText::new(format!("{}{marker}", pm.name))
-                                .color(ui.visuals().weak_text_color()),
-                        );
-                        let before = *value;
-                        match pm.kind {
-                            Kind::Switch => {
-                                widgets::segmented(ui, value, &["Off", "On"], act);
-                            }
-                            Kind::Combox if pm.options.len() <= 6 => {
-                                let opts: Vec<&str> =
-                                    pm.options.iter().map(String::as_str).collect();
-                                widgets::segmented(ui, value, &opts, act);
-                            }
-                            Kind::Combox => {
-                                let text = pm
-                                    .options
-                                    .get(*value as usize)
-                                    .cloned()
-                                    .unwrap_or_else(|| value.to_string());
-                                egui::ComboBox::from_id_salt(("combo", pm.index))
-                                    .selected_text(text)
-                                    .show_ui(ui, |ui| {
-                                        for (i, opt) in pm.options.iter().enumerate() {
-                                            ui.selectable_value(value, i as u16, opt);
+
+        const MARGIN: f32 = 16.0;
+        let plate_w = ui.available_width();
+        let inner_h = (min_h - 2.0 * MARGIN).max(220.0);
+        egui::Frame::new()
+            .fill(ui.visuals().extreme_bg_color)
+            .stroke(egui::Stroke::new(
+                0.5,
+                ui.visuals().widgets.inactive.bg_stroke.color,
+            ))
+            .corner_radius(10.0)
+            .inner_margin(MARGIN)
+            .show(ui, |ui| {
+                ui.set_width(plate_w - 2.0 * MARGIN);
+                ui.set_min_height(inner_h);
+                // centralização vertical: altura do conteúdo medida no frame anterior
+                let h_id = ui.id().with("plate-content-h");
+                let last_h: f32 = ui.data(|d| d.get_temp(h_id)).unwrap_or(0.0);
+                ui.add_space(((inner_h - last_h) / 2.0).max(0.0));
+
+                let content = ui.scope(|ui| {
+                    if !knobs.is_empty() {
+                        let scale = widgets::knob_scale(knobs.len());
+                        let spacing = ui.spacing().item_spacing.x;
+                        let knob_w = 74.0 * scale + spacing;
+                        let per_row =
+                            ((ui.available_width() + spacing) / knob_w).floor().max(1.0) as usize;
+                        for (row, chunk) in knobs.chunks(per_row).enumerate() {
+                            widgets::centered_row(ui, ui.id().with(("knob-row", row)), |ui| {
+                                for pm in chunk {
+                                    let value = &mut block.params[pm.index];
+                                    if widgets::knob(ui, value, pm, saved_of(pm.index), act, scale)
+                                        .changed()
+                                    {
+                                        changes.push((pm.index, *value));
+                                    }
+                                }
+                            });
+                        }
+                    }
+
+                    if !faders.is_empty() {
+                        ui.add_space(6.0);
+                        let mut values: Vec<u16> =
+                            faders.iter().map(|pm| block.params[pm.index]).collect();
+                        let saved: Vec<Option<u16>> =
+                            faders.iter().map(|pm| saved_of(pm.index)).collect();
+                        let moved = widgets::centered_row(ui, ui.id().with("faders"), |ui| {
+                            widgets::fader_bank(ui, &faders, &mut values, &saved, act)
+                        });
+                        for i in moved {
+                            block.params[faders[i].index] = values[i];
+                            changes.push((faders[i].index, values[i]));
+                        }
+                    }
+
+                    if !options.is_empty() {
+                        ui.add_space(14.0);
+                        widgets::centered_row(ui, ui.id().with("options"), |ui| {
+                            egui::Grid::new("options")
+                                .num_columns(2)
+                                .spacing([14.0, 8.0])
+                                .show(ui, |ui| {
+                                    for pm in &options {
+                                        let value = &mut block.params[pm.index];
+                                        let marker =
+                                            if saved_of(pm.index).is_some_and(|s| s != *value) {
+                                                " •"
+                                            } else {
+                                                ""
+                                            };
+                                        ui.label(
+                                            RichText::new(format!("{}{marker}", pm.name))
+                                                .color(ui.visuals().weak_text_color()),
+                                        );
+                                        let before = *value;
+                                        match pm.kind {
+                                            Kind::Switch => {
+                                                widgets::segmented(ui, value, &["Off", "On"], act);
+                                            }
+                                            Kind::Combox if pm.options.len() <= 6 => {
+                                                let opts: Vec<&str> =
+                                                    pm.options.iter().map(String::as_str).collect();
+                                                widgets::segmented(ui, value, &opts, act);
+                                            }
+                                            Kind::Combox => {
+                                                let text = pm
+                                                    .options
+                                                    .get(*value as usize)
+                                                    .cloned()
+                                                    .unwrap_or_else(|| value.to_string());
+                                                egui::ComboBox::from_id_salt(("combo", pm.index))
+                                                    .selected_text(text)
+                                                    .show_ui(ui, |ui| {
+                                                        for (i, opt) in
+                                                            pm.options.iter().enumerate()
+                                                        {
+                                                            ui.selectable_value(
+                                                                value, i as u16, opt,
+                                                            );
+                                                        }
+                                                    });
+                                            }
+                                            _ => {
+                                                ui.add(
+                                                    egui::DragValue::new(value).range(pm.range()),
+                                                );
+                                            }
                                         }
-                                    });
-                            }
-                            _ => {
-                                ui.add(egui::DragValue::new(value).range(pm.range()));
-                            }
-                        }
-                        if *value != before {
-                            changes.push((pm.index, *value));
-                        }
-                        ui.end_row();
+                                        if *value != before {
+                                            changes.push((pm.index, *value));
+                                        }
+                                        ui.end_row();
+                                    }
+                                });
+                        });
                     }
                 });
-        }
+
+                let h = content.response.rect.height();
+                if (h - last_h).abs() > 0.5 {
+                    ui.data_mut(|d| d.insert_temp(h_id, h));
+                    ui.ctx().request_discard("centralizar placa");
+                }
+            });
 
         for (param, value) in changes {
             self.send(Cmd::SetParam {

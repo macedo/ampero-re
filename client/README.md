@@ -23,6 +23,8 @@ egui/eframe, um binário nativo por SO. Ao abrir, conecta e sincroniza sozinha (
   (CC 48+bloco) em cima, miniatura do efeito no meio (esmaecida quando desligado) e nome embaixo.
 - Editor do bloco selecionado: troca de algoritmo e painel híbrido de parâmetros (nomes, faixas e opções vindos de
   `assets/params.json`):
+  - controles numa placa centralizada (na horizontal e na vertical) ao lado da foto; os knobs crescem quando são
+    poucos (até 3) e ficam compactos quando são muitos (7 ou mais);
   - knobs para contínuos: arrastar na vertical (Shift = ajuste fino), scroll, duplo clique volta ao padrão do efeito,
     clique no número para digitar o valor na unidade exibida (ex.: `856 ms`, `1.2k`, `+6`; Enter confirma, Esc cancela);
     o arco mostra o valor e um ponto na borda marca o padrão;
