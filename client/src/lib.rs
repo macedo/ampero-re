@@ -3,6 +3,7 @@
 pub mod assistant;
 pub mod device;
 pub mod logfile;
+pub mod mcp;
 pub mod params;
 pub mod preset;
 pub mod protocol;

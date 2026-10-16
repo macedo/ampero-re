@@ -86,6 +86,24 @@ Configuração ("Configurar" no painel), salva em `%APPDATA%\ampero\assistant.js
   texto puro no seu computador; deixe o campo vazio para usar a variável de ambiente.
 - Trocar provedor, modelo ou prompt começa uma conversa nova.
 
+### Assistente pelo Claude Desktop (MCP), com a sua assinatura
+
+Sem chave de API: o Claude Desktop (ou o Claude Code) usa as mesmas ferramentas do assistente por
+[MCP](https://modelcontextprotocol.io), com a assinatura Pro/Max do usuário.
+
+1. Na GUI, menu ⚙ → **Servidor MCP (Claude Desktop)**. A GUI aberta passa a atender em `127.0.0.1:47800`
+   (porta em `gui.json`); só programas desta máquina com o token de `mcp-token` (na pasta de configuração) entram,
+   e requisições de páginas web são recusadas.
+2. Menu ⚙ → **Conectar ao Claude…** → **Configurar o Claude Desktop**: acrescenta `ampero` em `mcpServers` no
+   `claude_desktop_config.json` (com backup), apontando para `ampero mcp`. Feche o Claude Desktop pela bandeja e
+   abra de novo. No Claude Code: `claude mcp add ampero -- "<pasta do app>/ampero" mcp`.
+3. Peça no Claude: "monte no Ampero o timbre do solo de Comfortably Numb".
+
+Ferramentas: `listar_algoritmos`, `detalhar_algoritmo`, `preset_atual` e `aplicar_timbre` (valida tudo antes e só
+muda o buffer de edição; **nada é salvo**). Quem fala com a pedaleira é a GUI, porque no Windows a porta MIDI é
+exclusiva: `ampero mcp` é só uma ponte stdio que responde o handshake sozinha e repassa as chamadas. Com a GUI
+fechada, as ferramentas avisam o Claude para pedir que você abra o app.
+
 `assets/params.json` é gerado do `algorithm.xml` da instalação oficial:
 `deno run --allow-read --allow-write ../tools/gen_params.ts <algorithm.xml> assets/params.json`.
 
@@ -102,6 +120,7 @@ ampero select P29-1                # seleciona preset
 ampero set AMP 0 20                # Gain do AMP = 20 (só no buffer de edição, não salva)
 ampero decode-log LOG --json x     # decodifica um log do proxy winmm, sem aparelho
 ampero monitor 60                  # mostra tudo que a pedaleira envia por 60 s
+ampero mcp                         # ponte MCP (stdio) do Claude Desktop para a GUI aberta
 ampero diff                        # buffer de edição vs preset salvo, byte a byte
 ampero info AMP "Marshell 800"     # foto e descrição de um efeito (da instalação oficial)
 ```
@@ -127,6 +146,7 @@ do editor oficial e são idênticos nos 198 presets.
 | `src/device.rs` | conexão MIDI, request/response com timeout e retry, sync em chunks |
 | `src/logfile.rs` | leitura dos logs do proxy, usada em testes e na decodificação offline |
 | `src/params.rs` | metadados de parâmetros (nomes, faixas, opções) |
+| `src/mcp.rs` | servidor MCP: JSON-RPC, HTTP local com token, ponte stdio `ampero mcp`, configuração do Claude Desktop |
 | `src/assistant.rs` | assistente de timbre: configuração, ferramentas do agente, validação de propostas, Claude e chat/completions |
 | `src/bin/ampero-gui/` | interface egui; `worker.rs` é a thread dona da conexão MIDI |
 | `tests/fixtures/` | trecho real de captura usado nos testes |

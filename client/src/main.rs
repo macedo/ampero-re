@@ -18,6 +18,7 @@ USO:
   ampero set MOD PARAM VALOR           altera parâmetro no buffer de edição (ex.: set AMP 0 20)
   ampero decode-log LOG [--json ARQ]   decodifica presets de um log do proxy winmm (offline)
   ampero monitor [SEGUNDOS]           mostra tudo que o aparelho envia (padrão: 60 s)
+  ampero mcp [PORTA]                   ponte MCP (stdio) do Claude Desktop para a GUI aberta (padrão: 47800)
 
 OPÇÕES:
   --port NOME   trecho do nome da porta MIDI (padrão: Ampero)
@@ -70,6 +71,13 @@ fn write_json(path: &Option<String>, value: &impl serde::Serialize) -> Result<()
 fn main() -> Result<()> {
     let a = parse_args()?;
     match a.cmd.as_str() {
+        "mcp" => {
+            let port = match a.pos.first() {
+                Some(p) => p.parse().context("porta inválida")?,
+                None => ampero::mcp::DEFAULT_PORT,
+            };
+            ampero::mcp::run_stdio_bridge(port)?;
+        }
         "ports" => {
             let (ins, outs) = device::list_ports()?;
             println!("Entradas:");

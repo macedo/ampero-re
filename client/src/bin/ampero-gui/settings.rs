@@ -29,10 +29,23 @@ impl Theme {
     }
 }
 
-#[derive(Serialize, Deserialize, Clone, PartialEq, Default)]
+#[derive(Serialize, Deserialize, Clone, PartialEq)]
 #[serde(default)]
 pub struct Settings {
     pub theme: Theme,
+    /// Servidor MCP ligado (Claude Desktop/Claude Code usam o assistente pela GUI aberta).
+    pub mcp_enabled: bool,
+    pub mcp_port: u16,
+}
+
+impl Default for Settings {
+    fn default() -> Self {
+        Settings {
+            theme: Theme::default(),
+            mcp_enabled: false,
+            mcp_port: ampero::mcp::DEFAULT_PORT,
+        }
+    }
 }
 
 impl Settings {

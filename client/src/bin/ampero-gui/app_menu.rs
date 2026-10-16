@@ -4,6 +4,7 @@
 use eframe::egui::{self, RichText};
 use std::sync::mpsc::Receiver;
 
+use crate::mcp_server::{McpServer, UiCall};
 use crate::self_update::{self, AppRelease, CheckResult, UpdateMsg, VERSION};
 use crate::settings::{Settings, Theme};
 use crate::widgets::accent;
@@ -23,6 +24,12 @@ pub struct AppMenu {
     download_progress: f32,
     /// Mensagem na faixa (resultado da verificação manual, erro do download…).
     notice: Option<String>,
+    mcp: Option<McpServer>,
+    /// Erro ao ligar o servidor MCP (porta ocupada…); não tenta de novo até mudar a opção.
+    mcp_error: Option<String>,
+    show_mcp: bool,
+    /// Resultado do botão "Configurar o Claude Desktop".
+    mcp_install_status: Option<String>,
 }
 
 impl AppMenu {
@@ -40,7 +47,37 @@ impl AppMenu {
             download_rx: None,
             download_progress: 0.0,
             notice: None,
+            mcp: None,
+            mcp_error: None,
+            show_mcp: false,
+            mcp_install_status: None,
         }
+    }
+
+    /// Liga ou desliga o servidor MCP conforme a configuração e devolve as chamadas de ferramenta que
+    /// chegaram (o app executa, porque tem o preset atual e a conexão com a pedaleira).
+    pub fn mcp_calls(&mut self, ctx: &egui::Context) -> Vec<UiCall> {
+        let want = self.settings.mcp_enabled;
+        match (&self.mcp, want) {
+            (None, true) if self.mcp_error.is_none() => {
+                match McpServer::start(ctx, self.settings.mcp_port) {
+                    Ok(s) => self.mcp = Some(s),
+                    Err(e) => self.mcp_error = Some(e),
+                }
+            }
+            (Some(_), false) => self.mcp = None,
+            _ => {}
+        }
+        self.mcp
+            .as_ref()
+            .map(|s| s.take_calls())
+            .unwrap_or_default()
+    }
+
+    fn set_mcp_enabled(&mut self, on: bool) {
+        self.settings.mcp_enabled = on;
+        self.mcp_error = None;
+        self.settings.save();
     }
 
     /// Processa respostas das threads de verificação e download. Chamar uma vez por frame.
@@ -112,6 +149,21 @@ impl AppMenu {
                     self.settings.save();
                     ui.close();
                 }
+            }
+            ui.separator();
+            let mut on = self.settings.mcp_enabled;
+            if ui
+                .checkbox(&mut on, "Servidor MCP (Claude Desktop)")
+                .on_hover_text("Deixa o Claude Desktop ou o Claude Code usarem o assistente de timbre com a sua assinatura")
+                .changed()
+                && act
+            {
+                self.set_mcp_enabled(on);
+            }
+            if ui.button("Conectar ao Claude…").clicked() && act {
+                self.show_mcp = true;
+                self.mcp_install_status = None;
+                ui.close();
             }
             ui.separator();
             if ui.button("Verificar atualizações").clicked() && act {
@@ -192,6 +244,113 @@ impl AppMenu {
                 });
             }
         });
+    }
+
+    /// Janela "Conectar ao Claude": estado do servidor MCP e como ligar o Claude Desktop/Claude Code.
+    pub fn mcp_window(&mut self, ctx: &egui::Context, act: bool) {
+        if !self.show_mcp {
+            return;
+        }
+        let mut open = true;
+        let exe = if cfg!(windows) {
+            "ampero.exe"
+        } else {
+            "ampero"
+        };
+        let cli = std::env::current_exe()
+            .ok()
+            .and_then(|p| Some(p.parent()?.join(exe)))
+            .unwrap_or_else(|| exe.into());
+        let port = self.settings.mcp_port;
+        egui::Window::new("Conectar ao Claude")
+            .open(&mut open)
+            .collapsible(false)
+            .resizable(false)
+            .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+            .default_width(560.0)
+            .show(ctx, |ui| {
+                ui.set_max_width(560.0);
+                ui.label(
+                    "Com o servidor MCP ligado, o Claude Desktop (ou o Claude Code) monta timbres com as \
+                     ferramentas do Ampero usando a sua assinatura, sem chave de API. Ele consulta o catálogo, \
+                     lê o preset atual e aplica no buffer de edição; nada é salvo sem você.",
+                );
+                ui.add_space(6.0);
+                ui.horizontal(|ui| {
+                    let (color, text) = match (&self.mcp, &self.mcp_error) {
+                        (Some(s), _) => (egui::Color32::from_rgb(80, 200, 120), format!("Ligado em 127.0.0.1:{}", s.port)),
+                        (None, Some(e)) => (egui::Color32::from_rgb(220, 80, 80), format!("Erro: {e}")),
+                        (None, None) => (egui::Color32::GRAY, "Desligado".to_string()),
+                    };
+                    let (rect, _) = ui.allocate_exact_size(egui::vec2(10.0, 10.0), egui::Sense::hover());
+                    ui.painter().circle_filled(rect.center(), 4.5, color);
+                    ui.label(RichText::new(text).strong());
+                    let label = if self.settings.mcp_enabled { "Desligar" } else { "Ligar" };
+                    if ui.button(label).clicked() && act {
+                        self.set_mcp_enabled(!self.settings.mcp_enabled);
+                    }
+                });
+                if !cli.is_file() {
+                    ui.colored_label(
+                        egui::Color32::from_rgb(230, 110, 100),
+                        format!("Não achei {} ao lado do app; a ponte do Claude Desktop precisa dele.", cli.display()),
+                    );
+                }
+
+                ui.separator();
+                ui.label(RichText::new("Claude Desktop").strong());
+                ui.label("1. Ligue o servidor acima (ele fica ligado nas próximas vezes).");
+                ui.horizontal(|ui| {
+                    ui.label("2.");
+                    if ui.button("Configurar o Claude Desktop").clicked() && act {
+                        self.mcp_install_status = Some(match ampero::mcp::install_claude_desktop(&cli, port) {
+                            Ok(files) => format!(
+                                "Pronto: {} (backup .bak-ampero ao lado).",
+                                files.iter().map(|f| f.display().to_string()).collect::<Vec<_>>().join(", ")
+                            ),
+                            Err(e) => format!("Não deu para configurar: {e}"),
+                        });
+                    }
+                    ui.label(RichText::new("adiciona \"ampero\" em mcpServers, sem mexer no resto").weak());
+                });
+                if let Some(s) = &self.mcp_install_status {
+                    ui.label(RichText::new(s).small());
+                }
+                ui.label("3. Feche o Claude Desktop de vez (ícone na bandeja do sistema, Sair) e abra de novo.");
+                ui.label("4. Peça, por exemplo: \"monte no Ampero o timbre do solo de Comfortably Numb\".");
+                let snippet = serde_json::to_string_pretty(&serde_json::json!({
+                    "mcpServers": {"ampero": ampero::mcp::claude_desktop_entry(&cli, port)}
+                }))
+                .unwrap_or_default();
+                egui::CollapsingHeader::new("Configurar à mão").show(ui, |ui| {
+                    ui.label("Em claude_desktop_config.json (no Claude Desktop: Configurações > Desenvolvedor > Editar config):");
+                    let mut text = snippet.clone();
+                    ui.add(egui::TextEdit::multiline(&mut text).code_editor().desired_width(f32::INFINITY));
+                    if ui.small_button("Copiar").clicked() {
+                        ui.ctx().copy_text(snippet.clone());
+                    }
+                });
+
+                ui.separator();
+                ui.label(RichText::new("Claude Code").strong());
+                let cmd = format!("claude mcp add ampero -- \"{}\" mcp", cli.display());
+                ui.horizontal(|ui| {
+                    ui.code(&cmd);
+                    if ui.small_button("Copiar").clicked() {
+                        ui.ctx().copy_text(cmd.clone());
+                    }
+                });
+                ui.add_space(4.0);
+                ui.label(
+                    RichText::new(
+                        "Só programas desta máquina com o token (em mcp-token, na pasta de configuração) conseguem \
+                         usar o servidor; páginas da web são recusadas.",
+                    )
+                    .small()
+                    .weak(),
+                );
+            });
+        self.show_mcp = open;
     }
 
     pub fn about_window(&mut self, ctx: &egui::Context) {

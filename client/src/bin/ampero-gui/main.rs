@@ -5,6 +5,7 @@
 
 mod app_menu;
 mod assistant_panel;
+mod mcp_server;
 mod self_update;
 mod settings;
 mod widgets;
@@ -140,6 +141,47 @@ impl App {
             "Proposta aplicada em {} bloco(s) — salve para manter",
             blocks.len()
         );
+    }
+
+    /// Executa uma ferramenta pedida por um cliente MCP (Claude Desktop/Claude Code). Devolve (texto, é erro).
+    fn run_mcp_tool(&mut self, name: &str, args: &serde_json::Value) -> (String, bool) {
+        use ampero::assistant::{ToolContext, ToolOutcome, run_tool};
+        if name == "aplicar_timbre" {
+            if self.current.is_none() {
+                return (
+                    "A pedaleira não está conectada no app; nada foi aplicado.".into(),
+                    true,
+                );
+            }
+            return match ampero::mcp::resolve_args(args) {
+                Ok((proposal, blocks)) => {
+                    let n = blocks.len();
+                    self.apply_proposal(blocks);
+                    self.status = format!(
+                        "Claude aplicou “{}” no buffer — salve para manter",
+                        proposal.title
+                    );
+                    (
+                        format!(
+                            "Aplicado \"{}\" no buffer de edição ({n} bloco(s)). Não foi salvo: o usuário ouve e \
+                             salva pela pedaleira ou pelo app se gostar.",
+                            proposal.title
+                        ),
+                        false,
+                    )
+                }
+                Err(e) => (e, true),
+            };
+        }
+        let ctx = ToolContext {
+            preset: self.current.as_ref(),
+            resources: self.resources.as_ref(),
+        };
+        match run_tool(name, args, &ctx) {
+            ToolOutcome::Text(t) => (t, false),
+            ToolOutcome::Error(e) => (e, true),
+            ToolOutcome::Proposal(..) => ("Use aplicar_timbre para aplicar o timbre.".into(), true),
+        }
     }
 
     fn send(&self, cmd: Cmd) {
@@ -780,12 +822,20 @@ impl eframe::App for App {
         let ctx = ui.ctx().clone();
 
         self.menu.poll(&ctx);
+        // `send` só despacha comandos na primeira passada: as chamadas MCP são atendidas nela
+        if self.first_pass {
+            for call in self.menu.mcp_calls(&ctx) {
+                let reply = self.run_mcp_tool(&call.name, &call.args);
+                let _ = call.reply.send(reply);
+            }
+        }
         egui::Panel::top("top").show(ui, |ui| self.top_bar(ui));
         if self.menu.wants_banner() {
             let act = self.first_pass;
             egui::Panel::top("update-banner").show(ui, |ui| self.menu.banner(ui, act));
         }
         self.menu.about_window(&ctx);
+        self.menu.mcp_window(&ctx, self.first_pass);
         egui::Panel::left("presets")
             .default_size(260.0)
             .show(ui, |ui| self.preset_list(ui));
