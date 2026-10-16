@@ -220,6 +220,25 @@ pub fn block_switch(storage_index: usize, on: bool) -> Vec<u8> {
     ]
 }
 
+/// Ordem da cadeia do buffer de edição. `order` = índices de armazenamento (FX1=0 … RVB=8) na ordem em
+/// que o sinal passa; a mensagem leva a **posição de cada bloco**, na ordem de armazenamento (capturado do
+/// "Manage Signal Chain" do editor oficial). `None` se `order` não for uma permutação dos 9 blocos.
+pub fn chain_order(order: &[usize]) -> Option<Vec<u8>> {
+    let mut pos = [u8::MAX; 9];
+    for (i, &block) in order.iter().enumerate() {
+        if i >= 9 || block >= 9 || pos[block] != u8::MAX {
+            return None;
+        }
+        pos[block] = i as u8;
+    }
+    if pos.contains(&u8::MAX) {
+        return None;
+    }
+    let mut body = vec![0x00, 0x02, 0x06, 0x0D];
+    body.extend_from_slice(&pos);
+    Some(frame(OP_WRITE, &body))
+}
+
 pub const VOLUME_MAX: u16 = 99;
 pub const TEMPO_MIN: u16 = 40;
 pub const TEMPO_MAX: u16 = 250;
@@ -339,6 +358,27 @@ mod tests {
         // respostas de pedidos e MIDI curto não são notificações
         assert_eq!(n("F0 21 25 7F 4D 50 2D 64 12 00 00 05 00 01 00 F7"), None);
         assert_eq!(parse_notification(&hex("B6 08 00")), None);
+    }
+
+    #[test]
+    fn chain_order_matches_the_official_editor() {
+        let header = [
+            0xF0, 0x21, 0x25, 0x7F, 0x4D, 0x50, 0x2D, 0x64, 0x12, 0x00, 0x02, 0x06, 0x0D,
+        ];
+        let with = |tail: [u8; 9]| [&header[..], &tail[..], &[0xF7]].concat();
+        // capturado em 2026-10-16 no P29-1: FX3 movido para antes do FX2, e depois a ordem original
+        // (FX1 FX2 AMP CAB NR EQ FX3 DLY RVB = armazenamento 0 1 2 4 3 5 6 7 8)
+        assert_eq!(
+            chain_order(&[0, 6, 1, 2, 4, 3, 5, 7, 8]).unwrap(),
+            with([0, 2, 3, 5, 4, 6, 1, 7, 8])
+        );
+        assert_eq!(
+            chain_order(&[0, 1, 2, 4, 3, 5, 6, 7, 8]).unwrap(),
+            with([0, 1, 2, 4, 3, 5, 6, 7, 8])
+        );
+        assert_eq!(chain_order(&[0, 1, 2]), None); // incompleta
+        assert_eq!(chain_order(&[0, 0, 2, 4, 3, 5, 6, 7, 8]), None); // repetida
+        assert_eq!(chain_order(&[0, 1, 2, 4, 3, 5, 6, 7, 9]), None); // fora da faixa
     }
 
     #[test]

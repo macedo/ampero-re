@@ -33,6 +33,8 @@ pub enum Cmd {
     SetVolume(u16),
     /// Patch Tempo (40–250 BPM) do buffer de edição.
     SetTempo(u16),
+    /// Ordem da cadeia: índices de armazenamento (FX1=0 … RVB=8) na ordem do sinal.
+    SetChain(Vec<usize>),
     Save {
         bank: u8,
         slot: u8,
@@ -260,6 +262,11 @@ fn handle(d: &mut Device, cmd: Cmd, emit: &impl Fn(Evt)) -> anyhow::Result<()> {
             for msg in p::patch_tempo(bpm) {
                 d.send(&msg)?;
             }
+        }
+        Cmd::SetChain(order) => {
+            let msg = p::chain_order(&order)
+                .ok_or_else(|| anyhow::anyhow!("ordem de cadeia inválida"))?;
+            d.send(&msg)?;
         }
         Cmd::Save { bank, slot, name } => {
             d.send(&p::save_preset(bank, slot))?;

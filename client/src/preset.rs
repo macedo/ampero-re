@@ -71,6 +71,21 @@ pub fn algorithm_name(module: &str, code: u16) -> Option<String> {
 }
 
 /// Rótulo da UI ("P29-1") a partir do slot dentro do banco.
+/// Ordem da cadeia a partir dos 9 pares em `0x19A`: o byte par de cada par é a **posição** do bloco
+/// (na ordem de armazenamento FX1 FX2 AMP NR CAB …), não o bloco de cada posição. Na ordem padrão as duas
+/// leituras coincidem (só CAB e NR trocam de lugar); com o FX3 antes do FX2, o editor oficial grava
+/// `00 02 03 05 04 06 01 07 08`. Se os bytes não forem uma permutação, cai na ordem de armazenamento.
+fn chain_from_positions(pairs: &[u8]) -> Vec<&'static str> {
+    let mut chain = [None; 9];
+    for (block, pair) in pairs.chunks(2).take(9).enumerate() {
+        match chain.get_mut(pair[0] as usize) {
+            Some(slot @ None) => *slot = Some(MODULES[block]),
+            _ => return MODULES.to_vec(),
+        }
+    }
+    chain.iter().map(|m| m.unwrap_or("?")).collect()
+}
+
 pub fn slot_label(slot: u8) -> String {
     format!("P{:02}-{}", slot / 3 + 1, slot % 3 + 1)
 }
@@ -159,9 +174,7 @@ impl Preset {
             volume_pre: raw[VOL_POSITION_AT] != 0,
             ctrl_state: raw[CTRL_STATE_AT],
             blocks,
-            chain: (0..9)
-                .filter_map(|k| MODULES.get(raw[CHAIN_AT + 2 * k] as usize).copied())
-                .collect(),
+            chain: chain_from_positions(&raw[CHAIN_AT..CHAIN_AT + 18]),
             quick_knobs,
             exp,
             raw: raw.to_vec(),
@@ -198,6 +211,26 @@ impl Preset {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn chain_bytes_are_the_position_of_each_block() {
+        let pairs = |pos: [u8; 9]| pos.iter().flat_map(|&p| [p, 0]).collect::<Vec<u8>>();
+        // padrão: FX1 FX2 AMP CAB NR EQ FX3 DLY RVB
+        assert_eq!(
+            chain_from_positions(&pairs([0, 1, 2, 4, 3, 5, 6, 7, 8])),
+            ["FX1", "FX2", "AMP", "CAB", "NR", "EQ", "FX3", "DLY", "RVB"]
+        );
+        // FX3 antes do FX2 (capturado do editor oficial e relido do aparelho em 2026-10-16)
+        assert_eq!(
+            chain_from_positions(&pairs([0, 2, 3, 5, 4, 6, 1, 7, 8])),
+            ["FX1", "FX3", "FX2", "AMP", "CAB", "NR", "EQ", "DLY", "RVB"]
+        );
+        // bytes inválidos (posição repetida): ordem de armazenamento
+        assert_eq!(
+            chain_from_positions(&pairs([0, 0, 2, 4, 3, 5, 6, 7, 8])),
+            MODULES.to_vec()
+        );
+    }
 
     #[test]
     fn labels() {
