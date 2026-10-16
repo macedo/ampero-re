@@ -485,9 +485,9 @@ impl App {
                     } else {
                         themed(ui, Color32::from_gray(70), Color32::from_gray(190))
                     };
-                    // o card inteiro é arrastável (a posição na cadeia vai como carga); os botões de
-                    // dentro continuam respondendo a clique
-                    let card = ui.dnd_drag_source(egui::Id::new(("chain-card", k)), pos, |ui| {
+                    // o card inteiro é arrastável (a posição na cadeia vai como carga) e clicável: o clique
+                    // no ON/OFF liga/desliga, no resto do card seleciona o bloco (ver `drag_card`)
+                    let card = drag_card(ui, egui::Id::new(("chain-card", k)), pos, |ui| {
                         ui.spacing_mut().item_spacing.x = card_spacing; // dentro do card, o normal
                         egui::Frame::new()
                             .fill(fill)
@@ -497,39 +497,34 @@ impl App {
                             .show(ui, |ui| {
                                 ui.set_width(CARD_W);
                                 ui.vertical(|ui| {
-                                    // topo: tipo do bloco + ON/OFF
-                                    ui.horizontal(|ui| {
-                                        ui.add_sized(
-                                            [CARD_W - 42.0, 18.0],
-                                            egui::Label::new(RichText::new(block.module).strong()),
-                                        );
-                                        let (text, color) = if block.on {
-                                            ("ON", accent(ui))
-                                        } else {
-                                            (
-                                                "OFF",
-                                                themed(
-                                                    ui,
-                                                    Color32::from_gray(140),
-                                                    Color32::from_gray(110),
+                                    // topo: tipo do bloco + ON/OFF (devolve onde o botão ficou)
+                                    let toggle_rect = ui
+                                        .horizontal(|ui| {
+                                            ui.add_sized(
+                                                [CARD_W - 42.0, 18.0],
+                                                egui::Label::new(
+                                                    RichText::new(block.module).strong(),
                                                 ),
-                                            )
-                                        };
-                                        let toggle = egui::Button::new(
-                                            RichText::new(text).small().strong().color(color),
-                                        );
-                                        if ui.add_sized([34.0, 18.0], toggle).clicked()
-                                            && self.first_pass
-                                        {
-                                            block.on = !block.on;
-                                            self.pedal_switched[k] = false; // alternado pela GUI: é edição
-                                            self.send(Cmd::Switch {
-                                                block: k,
-                                                on: block.on,
-                                            });
-                                        }
-                                    });
-                                    // meio: miniatura (clicar seleciona o bloco)
+                                            );
+                                            let (text, color) = if block.on {
+                                                ("ON", accent(ui))
+                                            } else {
+                                                (
+                                                    "OFF",
+                                                    themed(
+                                                        ui,
+                                                        Color32::from_gray(140),
+                                                        Color32::from_gray(110),
+                                                    ),
+                                                )
+                                            };
+                                            let toggle = egui::Button::new(
+                                                RichText::new(text).small().strong().color(color),
+                                            );
+                                            ui.add_sized([34.0, 18.0], toggle).rect
+                                        })
+                                        .inner;
+                                    // meio: miniatura
                                     let picture = match &thumb {
                                         Some(tex) => {
                                             let size = tex.size_vec2();
@@ -551,21 +546,35 @@ impl App {
                                         )
                                         .frame(false),
                                     };
-                                    let clicked_picture =
-                                        ui.add_sized([CARD_W, THUMB_H], picture).clicked();
+                                    ui.add_sized([CARD_W, THUMB_H], picture);
                                     // embaixo: nome do efeito
                                     let label = block.algorithm_name.as_deref().unwrap_or("?");
                                     let select = egui::Button::new(RichText::new(label).small())
                                         .frame(false)
                                         .truncate();
-                                    let clicked_name =
-                                        ui.add_sized([CARD_W, 16.0], select).clicked();
-                                    if clicked_picture || clicked_name {
-                                        self.selected_block = k;
-                                    }
-                                });
-                            });
+                                    ui.add_sized([CARD_W, 16.0], select);
+                                    toggle_rect
+                                })
+                                .inner
+                            })
+                            .inner
                     });
+                    if card.response.clicked() && self.first_pass {
+                        let on_toggle = card
+                            .response
+                            .interact_pointer_pos()
+                            .is_some_and(|p| card.inner.contains(p));
+                        if on_toggle {
+                            block.on = !block.on;
+                            self.pedal_switched[k] = false; // alternado pela GUI: é edição
+                            self.send(Cmd::Switch {
+                                block: k,
+                                on: block.on,
+                            });
+                        } else {
+                            self.selected_block = k;
+                        }
+                    }
                     card_rects.push(card.response.rect);
                 }
                 flow_arrow(ui, card_h); // saída
@@ -1171,6 +1180,36 @@ impl eframe::App for App {
             }
             self.current = Some(cur);
         });
+    }
+}
+
+/// Card arrastável **e clicável**. Igual ao `Ui::dnd_drag_source` do egui, só que com `Sense::click_and_drag`:
+/// o do egui sente só arraste, e aí o egui começa o arraste já no clique (o card "decola" e nenhum clique
+/// chega, nem nos botões de dentro). Aqui o arraste só começa depois de o mouse andar alguns pixels, e um
+/// clique parado volta como `clicked()` na resposta — quem chama decide o que ele faz pela posição.
+fn drag_card<R>(
+    ui: &mut egui::Ui,
+    id: egui::Id,
+    payload: usize,
+    add_contents: impl FnOnce(&mut egui::Ui) -> R,
+) -> egui::InnerResponse<R> {
+    if ui.ctx().is_being_dragged(id) {
+        egui::DragAndDrop::set_payload(ui.ctx(), payload);
+        // desenha o card numa camada própria e o leva até o ponteiro
+        let layer = egui::LayerId::new(egui::Order::Tooltip, id);
+        let out = ui.scope_builder(egui::UiBuilder::new().layer_id(layer), add_contents);
+        if let Some(pointer) = ui.ctx().pointer_interact_pos() {
+            let delta = pointer - out.response.rect.center();
+            ui.ctx()
+                .transform_layer_shapes(layer, egui::emath::TSTransform::from_translation(delta));
+        }
+        out
+    } else {
+        let out = ui.scope(add_contents);
+        let response = ui
+            .interact(out.response.rect, id, egui::Sense::click_and_drag())
+            .on_hover_cursor(egui::CursorIcon::PointingHand);
+        egui::InnerResponse::new(out.inner, response)
     }
 }
 
