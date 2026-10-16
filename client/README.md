@@ -57,7 +57,8 @@ sempre conferidos relendo o buffer ou ressincronizando.
 ### Montar timbres com o Claude (MCP)
 
 O Claude Desktop (ou o Claude Code) monta timbres de músicas, bandas ou estilos usando **só o que o Ampero tem**,
-por [MCP](https://modelcontextprotocol.io), com a assinatura Pro/Max do usuário (sem chave de API).
+por [MCP](https://modelcontextprotocol.io), com a conta do usuário (sem chave de API). Passo a passo para o usuário,
+com problemas comuns: [`docs/claude-mcp.md`](../docs/claude-mcp.md).
 
 1. Na GUI, menu ⚙ → **Conectar ao Claude…** → **Ligar**. A GUI aberta passa a atender em `127.0.0.1:47800`
    (porta em `gui.json`); só programas desta máquina com o token de `mcp-token` (na pasta de configuração) entram,
