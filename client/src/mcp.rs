@@ -9,7 +9,7 @@
 //!
 //! Nada é salvo na pedaleira por aqui: `aplicar_timbre` só muda o buffer de edição.
 
-use crate::assistant;
+use crate::timbre;
 use serde_json::{Value, json};
 use std::io::{self, BufRead, BufReader, Read, Write};
 use std::net::{TcpStream, ToSocketAddrs};
@@ -34,37 +34,13 @@ pub trait ToolHost {
     fn call(&mut self, name: &str, args: &Value) -> (String, bool);
 }
 
-/// Ferramentas expostas: as de consulta do assistente e `aplicar_timbre` no lugar de `propor_timbre`.
+/// Ferramentas expostas (as de `timbre`).
 pub fn tool_list() -> Value {
-    let tools: Vec<Value> = assistant::tool_specs()
+    let tools: Vec<Value> = timbre::tool_specs()
         .into_iter()
-        .map(|t| {
-            let (name, description) = if t.name == "propor_timbre" {
-                (
-                    "aplicar_timbre",
-                    "Aplica um timbre no buffer de edição da pedaleira (não salva). Inclua só os blocos que \
-                     devem mudar; blocos omitidos ficam como estão. Valores na unidade exibida (ex.: 450 para \
-                     450 ms), opções de combo pelo nome e chaves como true/false. Se houver erros, nada é \
-                     aplicado e a ferramenta lista o que corrigir.",
-                )
-            } else {
-                (t.name, t.description)
-            };
-            json!({"name": name, "description": description, "inputSchema": t.schema})
-        })
+        .map(|t| json!({"name": t.name, "description": t.description, "inputSchema": t.schema}))
         .collect();
     json!({ "tools": tools })
-}
-
-/// Valida a proposta (formato e `assistant::resolve`); `Ok` traz os blocos prontos para aplicar.
-pub fn resolve_args(
-    args: &Value,
-) -> Result<(assistant::Proposal, Vec<assistant::ResolvedBlock>), String> {
-    let p: assistant::Proposal =
-        serde_json::from_value(args.clone()).map_err(|e| format!("formato inválido: {e}"))?;
-    let blocks = assistant::resolve(&p)
-        .map_err(|errs| format!("Nada foi aplicado. Corrija:\n- {}", errs.join("\n- ")))?;
-    Ok((p, blocks))
 }
 
 // ---------------------------------------------------------------- JSON-RPC
@@ -366,10 +342,12 @@ pub fn run_stdio_bridge(port: u16) -> io::Result<()> {
     let mut out = io::stdout().lock();
     for line in stdin.lock().lines() {
         let line = line?;
+        // alguns terminais (PowerShell) mandam um BOM UTF-8 no começo da entrada
+        let line = line.trim_start_matches('\u{feff}');
         if line.trim().is_empty() {
             continue;
         }
-        let reply = match serde_json::from_str::<Value>(&line) {
+        let reply = match serde_json::from_str::<Value>(line) {
             Ok(msg) => handle_message(&msg, &mut host),
             Err(e) => Some(error(&Value::Null, -32700, &format!("JSON inválido: {e}"))),
         };
@@ -543,23 +521,6 @@ mod tests {
         )
         .unwrap();
         assert_eq!(bad["error"]["code"], -32601);
-    }
-
-    #[test]
-    fn aplicar_timbre_validates_before_anything_is_sent() {
-        let ok = resolve_args(&json!({"title": "t", "explanation": "e", "blocks": [
-            {"module": "AMP", "algorithm": "Marshell 800", "on": true, "params": {"Gain": 60}}
-        ]}))
-        .unwrap();
-        assert_eq!((ok.1[0].block, ok.1[0].algorithm), (2, 65));
-        let err = resolve_args(&json!({"title": "t", "explanation": "e", "blocks": [
-            {"module": "AMP", "algorithm": "Marshall 800", "on": true, "params": {}}
-        ]}))
-        .unwrap_err();
-        assert!(
-            err.contains("Nada foi aplicado") && err.contains("Marshall 800"),
-            "{err}"
-        );
     }
 
     fn req(method: &str, path: &str, headers: &[(&str, &str)]) -> HttpRequest {

@@ -4,7 +4,6 @@
 //! Editor gráfico multiplataforma para o Hotone Ampero (egui/eframe).
 
 mod app_menu;
-mod assistant_panel;
 mod mcp_server;
 mod self_update;
 mod settings;
@@ -21,7 +20,7 @@ fn main() -> eframe::Result<()> {
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_inner_size([1440.0, 860.0])
-            .with_maximized(true) // três colunas (presets, editor, assistente) pedem espaço
+            .with_maximized(true) // duas colunas (presets e editor) com a cadeia inteira pedem espaço
             .with_title("Ampero")
             .with_icon(
                 eframe::icon_data::from_png_bytes(include_bytes!("../../../assets/icon.png"))
@@ -55,10 +54,6 @@ struct App {
     /// O egui pode rodar `ui()` duas vezes no mesmo frame (multi-pass) com o mesmo input;
     /// efeitos colaterais só podem acontecer na primeira passada.
     first_pass: bool,
-    /// Painel do assistente de timbre (IA).
-    assistant: assistant_panel::AssistantPanel,
-    /// Painel do assistente expandido (false = faixa recolhida).
-    assistant_open: bool,
     /// Menu ⚙ (tema, sobre, versão) e aviso de atualização.
     menu: app_menu::AppMenu,
 }
@@ -85,8 +80,6 @@ impl App {
             resources: ampero::resources::Resources::locate(),
             textures: Default::default(),
             first_pass: true,
-            assistant: assistant_panel::AssistantPanel::new(&cc.egui_ctx),
-            assistant_open: false, // começa recolhido; « na faixa da direita abre
             menu: app_menu::AppMenu::new(&cc.egui_ctx),
         };
         app.worker.send(Cmd::Connect(app.port.clone()));
@@ -94,9 +87,9 @@ impl App {
         app
     }
 
-    /// Aplica uma proposta do assistente no buffer de edição: troca algoritmos, liga/desliga blocos e
+    /// Aplica um timbre (vindo do MCP) no buffer de edição: troca algoritmos, liga/desliga blocos e
     /// ajusta parâmetros; no fim relê o buffer para a tela mostrar o estado real. Nada é salvo.
-    fn apply_proposal(&mut self, blocks: Vec<ampero::assistant::ResolvedBlock>) {
+    fn apply_proposal(&mut self, blocks: Vec<ampero::timbre::ResolvedBlock>) {
         let Some(cur) = self.current.as_ref() else {
             self.status = "Conecte a pedaleira para aplicar a proposta".into();
             return;
@@ -145,34 +138,7 @@ impl App {
 
     /// Executa uma ferramenta pedida por um cliente MCP (Claude Desktop/Claude Code). Devolve (texto, é erro).
     fn run_mcp_tool(&mut self, name: &str, args: &serde_json::Value) -> (String, bool) {
-        use ampero::assistant::{ToolContext, ToolOutcome, run_tool};
-        if name == "aplicar_timbre" {
-            if self.current.is_none() {
-                return (
-                    "A pedaleira não está conectada no app; nada foi aplicado.".into(),
-                    true,
-                );
-            }
-            return match ampero::mcp::resolve_args(args) {
-                Ok((proposal, blocks)) => {
-                    let n = blocks.len();
-                    self.apply_proposal(blocks);
-                    self.status = format!(
-                        "Claude aplicou “{}” no buffer — salve para manter",
-                        proposal.title
-                    );
-                    (
-                        format!(
-                            "Aplicado \"{}\" no buffer de edição ({n} bloco(s)). Não foi salvo: o usuário ouve e \
-                             salva pela pedaleira ou pelo app se gostar.",
-                            proposal.title
-                        ),
-                        false,
-                    )
-                }
-                Err(e) => (e, true),
-            };
-        }
+        use ampero::timbre::{ToolContext, ToolOutcome, run_tool};
         let ctx = ToolContext {
             preset: self.current.as_ref(),
             resources: self.resources.as_ref(),
@@ -180,7 +146,26 @@ impl App {
         match run_tool(name, args, &ctx) {
             ToolOutcome::Text(t) => (t, false),
             ToolOutcome::Error(e) => (e, true),
-            ToolOutcome::Proposal(..) => ("Use aplicar_timbre para aplicar o timbre.".into(), true),
+            ToolOutcome::Apply(_, _) if self.current.is_none() => (
+                "A pedaleira não está conectada no app; nada foi aplicado.".into(),
+                true,
+            ),
+            ToolOutcome::Apply(proposal, blocks) => {
+                let n = blocks.len();
+                self.apply_proposal(blocks);
+                self.status = format!(
+                    "Claude aplicou “{}” no buffer — salve para manter",
+                    proposal.title
+                );
+                (
+                    format!(
+                        "Aplicado \"{}\" no buffer de edição ({n} bloco(s)). Não foi salvo: o usuário ouve e \
+                         salva pela pedaleira ou pelo app se gostar.",
+                        proposal.title
+                    ),
+                    false,
+                )
+            }
         }
     }
 
@@ -839,33 +824,6 @@ impl eframe::App for App {
         egui::Panel::left("presets")
             .default_size(260.0)
             .show(ui, |ui| self.preset_list(ui));
-        // Assistente recolhível: painel completo ou uma faixa fina com o botão de expandir.
-        // (Alternância explícita em vez de Panel::show_switched: a animação dele se perdia com as
-        // passadas extras que a centralização da placa pede ao egui.)
-        let act = self.first_pass;
-        let (actions, toggle) = if self.assistant_open {
-            egui::Panel::right("assistant")
-                .default_size(380.0)
-                .min_size(280.0)
-                .resizable(true)
-                .show(ui, |ui| self.assistant.ui(ui, self.current.as_ref(), act))
-                .inner
-        } else {
-            let expand = egui::Panel::right("assistant-collapsed")
-                .exact_size(44.0)
-                .resizable(false)
-                .show(ui, |ui| self.assistant.collapsed_ui(ui, act))
-                .inner;
-            (Vec::new(), expand)
-        };
-        if toggle {
-            self.assistant_open = !self.assistant_open;
-        }
-        for action in actions {
-            match action {
-                assistant_panel::Action::Apply(blocks) => self.apply_proposal(blocks),
-            }
-        }
         egui::CentralPanel::default().show(ui, |ui| {
             let Some(mut cur) = self.current.take() else {
                 ui.centered_and_justified(|ui| {

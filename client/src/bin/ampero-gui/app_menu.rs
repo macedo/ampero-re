@@ -154,7 +154,9 @@ impl AppMenu {
             let mut on = self.settings.mcp_enabled;
             if ui
                 .checkbox(&mut on, "Servidor MCP (Claude Desktop)")
-                .on_hover_text("Deixa o Claude Desktop ou o Claude Code usarem o assistente de timbre com a sua assinatura")
+                .on_hover_text(
+                    "Deixa o Claude Desktop ou o Claude Code montarem timbres com a sua assinatura",
+                )
                 .changed()
                 && act
             {
@@ -363,7 +365,7 @@ impl AppMenu {
             .show(ctx, |ui| {
                 ui.set_max_width(440.0);
                 ui.heading(format!("Ampero {VERSION}"));
-                ui.label("Editor multiplataforma para a pedaleira Hotone Ampero, com assistente de timbre por IA.");
+                ui.label("Editor multiplataforma para a pedaleira Hotone Ampero, que monta timbres com o Claude via MCP.");
                 ui.add_space(8.0);
                 ui.add(
                     egui::Label::new(

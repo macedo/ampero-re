@@ -33,7 +33,7 @@ impl Theme {
 #[serde(default)]
 pub struct Settings {
     pub theme: Theme,
-    /// Servidor MCP ligado (Claude Desktop/Claude Code usam o assistente pela GUI aberta).
+    /// Servidor MCP ligado (Claude Desktop/Claude Code montam timbres pela GUI aberta).
     pub mcp_enabled: bool,
     pub mcp_port: u16,
 }
