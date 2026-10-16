@@ -41,6 +41,40 @@ impl ParamMeta {
     pub fn range(&self) -> std::ops::RangeInclusive<u16> {
         (self.min.max(0.0) as u16)..=(self.max.max(0.0) as u16)
     }
+
+    /// Valor exibido → valor bruto. `None` se estiver fora da faixa exibida (com folga de meio passo).
+    pub fn raw_from_display(&self, shown: f64) -> Option<u16> {
+        let (lo, hi) = (
+            self.display_min.min(self.display_max),
+            self.display_min.max(self.display_max),
+        );
+        let step = if self.max > self.min {
+            (hi - lo) / (self.max - self.min) / 2.0
+        } else {
+            0.5
+        };
+        if !shown.is_finite() || shown < lo - step || shown > hi + step {
+            return None;
+        }
+        let raw = if self.max > self.min && self.display_max != self.display_min {
+            self.min
+                + (shown - self.display_min) * (self.max - self.min)
+                    / (self.display_max - self.display_min)
+        } else {
+            shown
+        };
+        let range = self.range();
+        Some((raw.round().max(0.0) as u16).clamp(*range.start(), *range.end()))
+    }
+
+    /// Índice de uma opção de combo pelo nome (sem diferenciar maiúsculas/espaços).
+    pub fn option_index(&self, name: &str) -> Option<u16> {
+        let norm = |s: &str| s.to_lowercase().split_whitespace().collect::<String>();
+        self.options
+            .iter()
+            .position(|o| norm(o) == norm(name))
+            .map(|i| i as u16)
+    }
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -76,6 +110,16 @@ pub fn algorithms_of(module: &str) -> Vec<(u16, &'static str)> {
     v.sort();
     v.dedup_by_key(|(c, _)| *c);
     v
+}
+
+/// Algoritmo de um módulo pelo nome (sem diferenciar maiúsculas/espaços): `(código, metadados)`.
+pub fn find_by_name(module: &str, name: &str) -> Option<(u16, &'static AlgoMeta)> {
+    let norm = |s: &str| s.to_lowercase().split_whitespace().collect::<String>();
+    let wanted = norm(name);
+    algorithms_of(module)
+        .into_iter()
+        .find(|(_, n)| norm(n) == wanted)
+        .and_then(|(code, _)| Some((code, algorithm(module, code)?)))
 }
 
 #[cfg(test)]
