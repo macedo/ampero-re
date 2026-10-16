@@ -48,10 +48,9 @@ struct App {
     name_edit: Option<(u16, String)>,
     name_edit_error: Option<String>,
     name_edit_focus: bool,
-    /// Editando o tempo no cabeçalho (preset, texto), valor inválido e pedido de foco.
-    tempo_edit: Option<(u16, String)>,
-    tempo_edit_error: bool,
-    tempo_edit_focus: bool,
+    /// Campos "clique para digitar" do cabeçalho.
+    tempo_edit: widgets::NumberEdit,
+    volume_edit: widgets::NumberEdit,
     /// O tempo foi mudado pelo app (conta como "não salvo"; o tap tempo da pedaleira não conta).
     tempo_edited: bool,
     /// Último evento recebido da pedaleira e quando chegou.
@@ -88,9 +87,8 @@ impl App {
             name_edit: None,
             name_edit_error: None,
             name_edit_focus: false,
-            tempo_edit: None,
-            tempo_edit_error: false,
-            tempo_edit_focus: false,
+            tempo_edit: Default::default(),
+            volume_edit: Default::default(),
             tempo_edited: false,
             activity: None,
             pedal_switched: [false; 9],
@@ -995,63 +993,19 @@ impl App {
     /// para o buffer de edição.
     fn tempo_editor(&mut self, ui: &mut egui::Ui, cur: &mut Preset) {
         use ampero::protocol::{TEMPO_MAX, TEMPO_MIN};
-        if self
-            .tempo_edit
-            .as_ref()
-            .is_some_and(|(index, _)| *index != cur.index)
-        {
-            self.tempo_edit = None;
-            self.tempo_edit_error = false;
-        }
-        let Some((_, buf)) = self.tempo_edit.as_mut() else {
-            let resp = ui
-                .add(
-                    egui::Label::new(RichText::new(format!("{} BPM", cur.tempo)).strong())
-                        .sense(egui::Sense::click()),
-                )
-                .on_hover_cursor(egui::CursorIcon::Text)
-                .on_hover_text(format!(
-                    "Clique para mudar o tempo ({TEMPO_MIN}–{TEMPO_MAX} BPM)"
-                ));
-            if resp.clicked() {
-                self.tempo_edit = Some((cur.index, cur.tempo.to_string()));
-                self.tempo_edit_error = false;
-                self.tempo_edit_focus = true;
-            }
-            return;
+        let hover = format!("Clique para mudar o tempo ({TEMPO_MIN}–{TEMPO_MAX} BPM)");
+        let field = widgets::NumberField {
+            range: TEMPO_MIN..=TEMPO_MAX,
+            suffix: " BPM",
+            hover: &hover,
+            width: 64.0,
         };
-        if self.tempo_edit_error {
-            ui.colored_label(
-                Color32::from_rgb(230, 110, 100),
-                format!("{TEMPO_MIN} a {TEMPO_MAX}"),
-            );
-        }
-        let resp = ui.add(
-            egui::TextEdit::singleline(buf)
-                .char_limit(3)
-                .desired_width(36.0)
-                .horizontal_align(egui::Align::Center),
-        );
-        if std::mem::take(&mut self.tempo_edit_focus) {
-            resp.request_focus();
-        }
-        if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
-            self.tempo_edit = None;
-        } else if resp.lost_focus() {
-            match buf.trim().parse::<u16>() {
-                Ok(bpm) if (TEMPO_MIN..=TEMPO_MAX).contains(&bpm) => {
-                    if bpm != cur.tempo {
-                        cur.tempo = bpm;
-                        self.tempo_edited = true;
-                        self.send(Cmd::SetTempo(bpm));
-                    }
-                    self.tempo_edit = None;
-                }
-                _ => {
-                    self.tempo_edit_error = true;
-                    self.tempo_edit_focus = true;
-                }
-            }
+        if let Some(bpm) =
+            widgets::number_edit(ui, &mut self.tempo_edit, cur.index, cur.tempo, &field)
+        {
+            cur.tempo = bpm;
+            self.tempo_edited = true;
+            self.send(Cmd::SetTempo(bpm));
         }
     }
 
@@ -1079,24 +1033,30 @@ impl App {
                 ui.label(RichText::new("Tempo").weak());
                 ui.separator();
                 // slider sem o número embutido: dentro do layout da direita para a esquerda o egui punha o
-                // campo numérico por cima da trilha. O número vai num campo próprio, à direita do slider.
+                // campo numérico por cima da trilha. O número vai à direita, como texto clicável só de
+                // digitar (um DragValue também mudava o valor ao arrastar sobre ele).
                 let max = ampero::protocol::VOLUME_MAX;
                 let mut volume = cur.volume.min(max);
-                let number = ui
-                    .add(egui::DragValue::new(&mut volume).range(0..=max).speed(0.25))
-                    .on_hover_text("Clique para digitar o volume (0–99)");
-                let slider = ui
-                    .scope(|ui| {
-                        ui.spacing_mut().slider_width = 130.0;
-                        ui.add(
-                            egui::Slider::new(&mut volume, 0..=max)
-                                .show_value(false)
-                                .trailing_fill(true),
-                        )
-                    })
-                    .inner
-                    .on_hover_text("Volume do patch (0–99), igual ao editor oficial");
-                if (number.changed() || slider.changed()) && volume != cur.volume {
+                let field = widgets::NumberField {
+                    range: 0..=max,
+                    suffix: "",
+                    hover: "Clique para digitar o volume (0–99)",
+                    width: 24.0,
+                };
+                let typed =
+                    widgets::number_edit(ui, &mut self.volume_edit, cur.index, volume, &field);
+                if let Some(v) = typed {
+                    volume = v;
+                }
+                // distância maior que a margem de toque do egui (interact_radius, 5 px): sem ela, o controle
+                // ao lado (desenhado por cima) capturava o clique no número
+                ui.add_space(ui.style().interaction.interact_radius * 2.0);
+                // teste: knob compacto no lugar do slider (o slider deslocava sob o mouse e pulava)
+                let act = self.first_pass;
+                let knob = widgets::mini_knob(ui, &mut volume, 0..=max, 22.0, act).on_hover_text(
+                    "Volume do patch (0–99): arraste para cima/direita ou role a roda; com Shift, ajuste fino",
+                );
+                if (typed.is_some() || knob.changed()) && volume != cur.volume {
                     cur.volume = volume;
                     self.send(Cmd::SetVolume(volume));
                 }

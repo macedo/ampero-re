@@ -162,7 +162,40 @@ fn inline_value(
     changed
 }
 
-/// Knob giratório: arrastar na vertical ajusta (Shift = fino), scroll ajusta de 1 em 1,
+/// Roda do mouse sobre um controle: devolve (passos, fino). Sem Shift, um passo por frame com rolagem
+/// (como sempre foi); com Shift, ajuste fino de **um passo por dente da roda**. O egui transforma a roda
+/// com Shift em rolagem horizontal, então os dois eixos contam; o resto de um dente fica guardado em `id`.
+fn wheel_steps(ui: &egui::Ui, id: egui::Id) -> (f32, bool) {
+    let (delta, shift) = ui.input(|i| {
+        (
+            i.smooth_scroll_delta.y + i.smooth_scroll_delta.x,
+            i.modifiers.shift,
+        )
+    });
+    // pontos por dente da roda (40 no desktop)
+    let per_notch = ui
+        .ctx()
+        .options(|o| o.input_options.line_scroll_speed)
+        .max(1.0);
+    let key = id.with("wheel-fine");
+    if !shift {
+        ui.data_mut(|d| d.remove::<f32>(key));
+        return (
+            if delta.abs() > 0.5 {
+                delta.signum()
+            } else {
+                0.0
+            },
+            false,
+        );
+    }
+    let acc = ui.data(|d| d.get_temp::<f32>(key)).unwrap_or(0.0) + delta;
+    let steps = (acc / per_notch).trunc();
+    ui.data_mut(|d| d.insert_temp(key, acc - steps * per_notch));
+    (steps, true)
+}
+
+/// Knob giratório: arrastar na vertical ajusta (Shift = fino), scroll ajusta (Shift + scroll = 1 por dente),
 /// duplo clique volta ao padrão do efeito, clique no número para digitar.
 /// `act` = false na passada descartada do egui (multi-pass).
 pub fn knob(
@@ -200,12 +233,10 @@ pub fn knob(
             ui.data_mut(|d| d.insert_temp(id, acc));
             *value = acc.round() as u16;
         } else if resp.hovered() {
-            let scroll = ui.input(|i| i.smooth_scroll_delta.y);
-            if scroll.abs() > 0.5 {
-                let step = (span / 100.0).max(1.0);
-                *value = (*value as f32 + scroll.signum() * step)
-                    .clamp(lo, hi)
-                    .round() as u16;
+            let (steps, fine) = wheel_steps(ui, id);
+            if steps != 0.0 {
+                let step = if fine { 1.0 } else { (span / 100.0).max(1.0) };
+                *value = (*value as f32 + steps * step).clamp(lo, hi).round() as u16;
             }
         }
         if *value != before {
@@ -281,7 +312,7 @@ pub fn knob(
         );
     }
     resp.on_hover_text(format!(
-        "{}: {}\npadrão {} · arraste (Shift = fino), scroll ou duplo clique para o padrão\nclique no número para digitar o valor",
+        "{}: {}\npadrão {} · arraste ou role a roda (Shift = fino), duplo clique para o padrão\nclique no número para digitar o valor",
         pm.name,
         format_value(pm, *value),
         format_value(pm, pm.default as u16)
@@ -373,19 +404,20 @@ pub fn fader_bank(
                 ui.data_mut(|d| d.insert_temp(id, acc));
                 *value = acc.round() as u16;
             } else if resp.hovered() {
-                let (scroll, up, down) = ui.input(|i| {
+                let (up, down) = ui.input(|i| {
                     (
-                        i.smooth_scroll_delta.y,
                         i.key_pressed(egui::Key::ArrowUp),
                         i.key_pressed(egui::Key::ArrowDown),
                     )
                 });
-                let step = if up || scroll > 0.5 {
+                // roda: 1 por frame; Shift + roda: 1 por dente
+                let (wheel, _) = wheel_steps(ui, id);
+                let step = if up {
                     1.0
-                } else if down || scroll < -0.5 {
+                } else if down {
                     -1.0
                 } else {
-                    0.0
+                    wheel
                 };
                 *value = (*value as f32 + step).clamp(lo, hi) as u16;
             }
@@ -441,7 +473,7 @@ pub fn fader_bank(
             weak,
         );
         resp.on_hover_text(format!(
-            "{}: {}\narraste (Shift = fino), scroll ou ↑/↓ de 1 em 1, duplo clique = padrão ({})",
+            "{}: {}\narraste ou role a roda (Shift = fino), ↑/↓ de 1 em 1, duplo clique = padrão ({})",
             pm.name,
             format_value(pm, *value),
             format_value(pm, pm.default as u16)
@@ -507,6 +539,165 @@ pub fn segmented(ui: &mut egui::Ui, value: &mut u16, options: &[&str], act: bool
         }
     });
     changed
+}
+
+/// Knob compacto (só o disco, sem nome nem valor) para a barra do preset: arrastar para cima ou para a
+/// direita aumenta (Shift = ajuste fino), a roda do mouse anda de 1 em 1. `resp.changed()` quando o valor
+/// muda. Mesmo visual dos knobs do painel: trilha, arco dourado do valor e ponteiro.
+pub fn mini_knob(
+    ui: &mut egui::Ui,
+    value: &mut u16,
+    range: std::ops::RangeInclusive<u16>,
+    diameter: f32,
+    act: bool,
+) -> Response {
+    let (rect, mut resp) =
+        ui.allocate_exact_size(Vec2::splat(diameter + 4.0), Sense::click_and_drag());
+    let (lo, hi) = (*range.start() as f32, *range.end() as f32);
+    let span = (hi - lo).max(1.0);
+    let id = resp.id;
+    let before = *value;
+    // só na primeira passada do egui: na passada extra o mesmo arraste seria somado de novo
+    if !act {
+    } else if resp.dragged() {
+        let fine = ui.input(|i| i.modifiers.shift);
+        let mut acc: f32 = ui.data(|d| d.get_temp(id)).unwrap_or(*value as f32);
+        if resp.drag_started() {
+            acc = *value as f32;
+        }
+        let d = resp.drag_delta();
+        acc += (d.x - d.y) * span / 200.0 * if fine { 0.1 } else { 1.0 };
+        acc = acc.clamp(lo, hi);
+        ui.data_mut(|data| data.insert_temp(id, acc));
+        *value = acc.round() as u16;
+    } else if resp.hovered() {
+        // roda: 1 por frame; Shift + roda: 1 por dente
+        let (steps, _) = wheel_steps(ui, id);
+        if steps != 0.0 {
+            *value = (*value as f32 + steps).clamp(lo, hi) as u16;
+        }
+    }
+    if *value != before {
+        resp.mark_changed();
+    }
+
+    let painter = ui.painter_at(rect);
+    let center = rect.center();
+    let r = diameter / 2.0;
+    let frac = ((*value as f32 - lo) / span).clamp(0.0, 1.0);
+    let angle = |f: f32| (135.0 + 270.0 * f) * PI / 180.0;
+    let at = |a: f32, rad: f32| center + Vec2::new(a.cos(), a.sin()) * rad;
+    let arc = |to: f32| -> Vec<Pos2> {
+        let n = (to * 24.0).ceil().max(2.0) as usize;
+        (0..=n)
+            .map(|i| at(angle(to * i as f32 / n as f32), r))
+            .collect()
+    };
+    let track = ui
+        .visuals()
+        .widgets
+        .inactive
+        .bg_stroke
+        .color
+        .gamma_multiply(2.0);
+    painter.add(egui::Shape::line(arc(1.0), Stroke::new(2.5, track)));
+    if frac > 0.0 {
+        painter.add(egui::Shape::line(arc(frac), Stroke::new(2.5, GOLD)));
+    }
+    let fill = if resp.hovered() || resp.dragged() {
+        ui.visuals().widgets.hovered.bg_fill
+    } else {
+        ui.visuals().widgets.inactive.bg_fill
+    };
+    painter.circle(center, r * 0.62, fill, Stroke::new(1.0, track));
+    painter.line_segment(
+        [center, at(angle(frac), r * 0.55)],
+        Stroke::new(2.0, ui.visuals().strong_text_color()),
+    );
+    resp.on_hover_cursor(egui::CursorIcon::ResizeVertical)
+}
+
+/// Estado de um número "clique para digitar" (volume, tempo): o texto em edição pertence a um preset
+/// (`owner`), para não cair noutro se o preset trocar com o campo aberto.
+#[derive(Default)]
+pub struct NumberEdit {
+    edit: Option<(u16, String)>,
+    error: bool,
+    focus: bool,
+}
+
+/// O que não muda num campo "clique para digitar": faixa, sufixo exibido, dica e largura fixa.
+pub struct NumberField<'a> {
+    pub range: std::ops::RangeInclusive<u16>,
+    pub suffix: &'a str,
+    pub hover: &'a str,
+    /// Largura fixa (texto e campo de digitação): dentro do cabeçalho, montado da direita para a
+    /// esquerda, um número que ganha ou perde um dígito deslocava o slider ao lado durante o arraste.
+    pub width: f32,
+}
+
+/// Mostra `value` como texto clicável; o clique abre um campo só de digitar (sem arrastar), Enter
+/// confirma, Esc cancela e um valor fora da faixa fica marcado em vermelho. Devolve o valor novo quando
+/// confirmado e diferente do atual.
+pub fn number_edit(
+    ui: &mut egui::Ui,
+    state: &mut NumberEdit,
+    owner: u16,
+    value: u16,
+    field: &NumberField,
+) -> Option<u16> {
+    if state.edit.as_ref().is_some_and(|(o, _)| *o != owner) {
+        *state = NumberEdit::default();
+    }
+    let size = [field.width, 18.0];
+    let Some((_, buf)) = state.edit.as_mut() else {
+        let text = egui::RichText::new(format!("{value}{}", field.suffix)).strong();
+        let resp = ui
+            .add_sized(size, egui::Label::new(text).sense(Sense::click()))
+            .on_hover_cursor(egui::CursorIcon::Text)
+            .on_hover_text(field.hover);
+        if resp.clicked() {
+            *state = NumberEdit {
+                edit: Some((owner, value.to_string())),
+                error: false,
+                focus: true,
+            };
+        }
+        return None;
+    };
+    if state.error {
+        ui.colored_label(
+            Color32::from_rgb(230, 110, 100),
+            format!("{} a {}", field.range.start(), field.range.end()),
+        );
+    }
+    let resp = ui.add_sized(
+        size,
+        egui::TextEdit::singleline(buf)
+            .char_limit(3)
+            .horizontal_align(egui::Align::Center),
+    );
+    if std::mem::take(&mut state.focus) {
+        resp.request_focus();
+    }
+    if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+        state.edit = None;
+        return None;
+    }
+    if !resp.lost_focus() {
+        return None;
+    }
+    match buf.trim().parse::<u16>() {
+        Ok(v) if field.range.contains(&v) => {
+            state.edit = None;
+            (v != value).then_some(v)
+        }
+        _ => {
+            state.error = true;
+            state.focus = true;
+            None
+        }
+    }
 }
 
 #[cfg(test)]

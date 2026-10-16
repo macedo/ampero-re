@@ -36,11 +36,11 @@ egui/eframe, um binário nativo por SO. Ao abrir, conecta e sincroniza sozinha (
   `assets/params.json`):
   - controles numa placa centralizada (na horizontal e na vertical) ao lado da foto; os knobs crescem quando são
     poucos (até 3) e ficam compactos quando são muitos (7 ou mais);
-  - knobs para contínuos: arrastar na vertical (Shift = ajuste fino), scroll, duplo clique volta ao padrão do efeito,
+  - knobs para contínuos: arrastar na vertical ou rolar a roda (com Shift, ajuste fino: na roda, 1 unidade por dente), duplo clique volta ao padrão do efeito,
     clique no número para digitar o valor na unidade exibida (ex.: `856 ms`, `1.2k`, `+6`; Enter confirma, Esc cancela);
     o arco mostra o valor e um ponto na borda marca o padrão;
   - faders verticais para as bandas de EQ, com linhas horizontais de referência (+50/+25/0/−25/−50): arrasto
-    relativo em meia velocidade (Shift = 5× mais fino), scroll ou setas ↑/↓ de 1 em 1, duplo clique = padrão,
+    relativo em meia velocidade (Shift = 5× mais fino), roda ou setas ↑/↓ de 1 em 1 (Shift + roda = 1 por dente), duplo clique = padrão,
     clique no número para digitar;
   - botões segmentados para opções de até 6 itens e para on/off (listas longas, como Mic Type, ficam em dropdown);
   - valores com unidade real (ms, Hz/kHz, dB, semitons) e um ponto dourado quando difere do preset salvo.
@@ -50,7 +50,8 @@ egui/eframe, um binário nativo por SO. Ao abrir, conecta e sincroniza sozinha (
   `AMPERO_RESOURCES` com o caminho da pasta `Resource/Ampero`. Sem ela, a GUI funciona normalmente, só sem fotos.
 - Edições vão ao vivo para o buffer de edição. "não salvo" aparece quando o buffer difere do preset gravado.
   Liga/desliga feito pela pedaleira (CTRL, footswitch) é uso ao vivo e não conta como edição.
-- No cabeçalho, **Volume** do patch num slider (0–99) e **Tempo** clicável como o nome (40–250 BPM; Enter confirma,
+- No cabeçalho, **Volume** do patch num knob compacto (0–99; arraste para cima/direita ou role a roda; Shift = fino)
+  com o número clicável para digitar, e **Tempo** clicável como o nome (40–250 BPM; Enter confirma,
   Esc cancela); os dois vão na hora para o buffer de edição. Tap tempo feito na pedaleira não conta como "não salvo".
 - Salvar (só no banco de usuário) pede confirmação. Clicar no nome do preset no cabeçalho abre um campo para renomear
   (até 16 caracteres ASCII; Enter confirma, Esc cancela); o nome novo marca "não salvo" e é gravado no Salvar.
