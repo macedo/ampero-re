@@ -15,10 +15,8 @@ use worker::{Cmd, Evt, Worker};
 fn main() -> eframe::Result<()> {
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
-            // Sem with_maximized: no Windows com escala de tela ≠ 100%, abrir maximizado e depois
-            // restaurar deixava desenho (escala 1,0) e mouse (escala do sistema) desalinhados, e os
-            // cliques perto da borda direita erravam os botões.
             .with_inner_size([1440.0, 860.0])
+            .with_maximized(true) // três colunas (presets, editor, assistente) pedem espaço
             .with_title("Ampero"),
         ..Default::default()
     };
