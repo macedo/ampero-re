@@ -7,3 +7,4 @@
 /client/target/
 /proxy/winmm.dll
 /proxy/winmm.def
+/client/dist/

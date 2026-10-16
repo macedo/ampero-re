@@ -3,13 +3,17 @@
 
 //! Editor gráfico multiplataforma para o Hotone Ampero (egui/eframe).
 
+mod app_menu;
 mod assistant_panel;
+mod self_update;
+mod settings;
 mod widgets;
 mod worker;
 
 use ampero::params::{self, Kind};
 use ampero::preset::{MODULES, Preset};
 use eframe::egui::{self, Color32, RichText};
+use widgets::{accent, themed};
 use worker::{Cmd, Evt, Worker};
 
 fn main() -> eframe::Result<()> {
@@ -17,7 +21,11 @@ fn main() -> eframe::Result<()> {
         viewport: egui::ViewportBuilder::default()
             .with_inner_size([1440.0, 860.0])
             .with_maximized(true) // três colunas (presets, editor, assistente) pedem espaço
-            .with_title("Ampero"),
+            .with_title("Ampero")
+            .with_icon(
+                eframe::icon_data::from_png_bytes(include_bytes!("../../../assets/icon.png"))
+                    .expect("ícone PNG válido"),
+            ),
         ..Default::default()
     };
     eframe::run_native("Ampero", options, Box::new(|cc| Ok(Box::new(App::new(cc)))))
@@ -50,6 +58,8 @@ struct App {
     assistant: assistant_panel::AssistantPanel,
     /// Painel do assistente expandido (false = faixa recolhida).
     assistant_open: bool,
+    /// Menu ⚙ (tema, sobre, versão) e aviso de atualização.
+    menu: app_menu::AppMenu,
 }
 
 impl App {
@@ -76,6 +86,7 @@ impl App {
             first_pass: true,
             assistant: assistant_panel::AssistantPanel::new(&cc.egui_ctx),
             assistant_open: false, // começa recolhido; « na faixa da direita abre
+            menu: app_menu::AppMenu::new(&cc.egui_ctx),
         };
         app.worker.send(Cmd::Connect(app.port.clone()));
         app.worker.send(Cmd::Sync);
@@ -256,17 +267,17 @@ impl App {
             if let Some((text, at)) = &self.activity {
                 ui.separator();
                 let age = at.elapsed().as_secs_f32();
-                let color = if age < 1.5 {
-                    Color32::from_rgb(240, 190, 70)
-                } else {
-                    Color32::GRAY
-                };
+                let color = if age < 1.5 { accent(ui) } else { Color32::GRAY };
                 ui.label(RichText::new(format!("Pedaleira: {text}")).color(color));
                 if age < 1.5 {
                     ui.ctx()
                         .request_repaint_after(std::time::Duration::from_millis(200));
                 }
             }
+            let act = self.first_pass;
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                self.menu.menu_button(ui, act);
+            });
         });
     }
 
@@ -339,14 +350,18 @@ impl App {
                     .and_then(|p| self.texture(ui.ctx(), &p));
 
                     let fill = if block.on {
-                        Color32::from_rgb(70, 55, 20)
+                        themed(
+                            ui,
+                            Color32::from_rgb(70, 55, 20),
+                            Color32::from_rgb(250, 236, 200),
+                        )
                     } else {
-                        Color32::from_gray(35)
+                        themed(ui, Color32::from_gray(35), Color32::from_gray(236))
                     };
                     let stroke = if self.selected_block == k {
                         Color32::from_rgb(230, 180, 60)
                     } else {
-                        Color32::from_gray(70)
+                        themed(ui, Color32::from_gray(70), Color32::from_gray(190))
                     };
                     egui::Frame::new()
                         .fill(fill)
@@ -363,9 +378,16 @@ impl App {
                                         egui::Label::new(RichText::new(block.module).strong()),
                                     );
                                     let (text, color) = if block.on {
-                                        ("ON", Color32::from_rgb(240, 190, 70))
+                                        ("ON", accent(ui))
                                     } else {
-                                        ("OFF", Color32::from_gray(140))
+                                        (
+                                            "OFF",
+                                            themed(
+                                                ui,
+                                                Color32::from_gray(140),
+                                                Color32::from_gray(110),
+                                            ),
+                                        )
                                     };
                                     let toggle = egui::Button::new(
                                         RichText::new(text).small().strong().color(color),
@@ -390,7 +412,11 @@ impl App {
                                         let img = if block.on {
                                             img
                                         } else {
-                                            img.tint(Color32::from_gray(110))
+                                            img.tint(themed(
+                                                ui,
+                                                Color32::from_gray(110),
+                                                Color32::from_gray(170),
+                                            ))
                                         };
                                         egui::Button::image(img).frame(false)
                                     }
@@ -717,7 +743,7 @@ impl App {
             );
             let saved = self.presets.iter().find(|p| p.index == cur.index);
             if saved.is_some_and(|s| !same_sound(s, cur, &self.pedal_switched)) {
-                ui.label(RichText::new("não salvo").color(Color32::from_rgb(230, 180, 60)));
+                ui.label(RichText::new("não salvo").color(accent(ui)));
             }
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 let can_save = self.connected && cur.bank == 1;
@@ -736,7 +762,7 @@ impl App {
                 ));
                 // layout da direita para a esquerda: isto aparece à esquerda do volume/tempo
                 let (text, color) = if cur.ctrl_state != 0 {
-                    ("CTRL ON", Color32::from_rgb(240, 190, 70))
+                    ("CTRL ON", accent(ui))
                 } else {
                     ("CTRL off", Color32::from_gray(120))
                 };
@@ -753,7 +779,13 @@ impl eframe::App for App {
         self.handle_events();
         let ctx = ui.ctx().clone();
 
+        self.menu.poll(&ctx);
         egui::Panel::top("top").show(ui, |ui| self.top_bar(ui));
+        if self.menu.wants_banner() {
+            let act = self.first_pass;
+            egui::Panel::top("update-banner").show(ui, |ui| self.menu.banner(ui, act));
+        }
+        self.menu.about_window(&ctx);
         egui::Panel::left("presets")
             .default_size(260.0)
             .show(ui, |ui| self.preset_list(ui));
@@ -845,7 +877,7 @@ fn same_sound(a: &Preset, b: &Preset, ignore_on: &[bool; 9]) -> bool {
 /// com um pequeno espaço entre os itens; a nota de marcas registradas (`*…`) fica menor e esmaecida.
 fn description_view(ui: &mut egui::Ui, text: &str) {
     const SIZE: f32 = 13.5;
-    let gold = Color32::from_rgb(240, 190, 70);
+    let gold = accent(ui);
     let body = ui.visuals().text_color();
     let mut in_controls = false;
     let mut pending_gap = false;

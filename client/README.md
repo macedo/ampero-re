@@ -18,6 +18,13 @@ cargo build --release --features gui   # CLI + interface gráfica (ampero-gui)
 
 egui/eframe, um binário nativo por SO. Ao abrir, conecta e sincroniza sozinha (~2,5 s).
 
+- No Windows, instale com `ampero-X.Y.Z-windows-x64-setup.exe` da página de releases (por usuário, sem admin).
+- Menu ⚙ no canto superior direito: tema (seguir o sistema, claro ou escuro, salvo em `gui.json`), verificar
+  atualizações, sobre e versão.
+- Ao abrir, procura uma versão nova nas releases do GitHub. Se houver, uma faixa mostra as novidades e, na cópia
+  instalada pelo instalador, **Atualizar e reiniciar** (baixa, confere o SHA-256 e reabre na versão nova). Em
+  cópias do zip, no macOS e no Linux, o botão leva à página da release (detalhes em [`../RELEASING.md`](../RELEASING.md)).
+
 - Lista de presets (User / Factory) com busca. Clicar seleciona o preset no aparelho.
 - Cadeia de sinal na ordem real do preset, numa faixa horizontal de cards: tipo do bloco e botão ON/OFF
   (CC 48+bloco) em cima, miniatura do efeito no meio (esmaecida quando desligado) e nome embaixo. Quando não

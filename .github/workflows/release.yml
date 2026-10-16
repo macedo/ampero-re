@@ -115,10 +115,38 @@ jobs:
           ext=""; [ "$RUNNER_OS" = "Windows" ] && ext=".exe"
           "dist/$PKG/ampero$ext" decode-log tests/fixtures/sync_excerpt.log | grep -q 'K NIU DS'
 
+      # Instalador do Windows (Inno Setup): é ele que o app baixa para se atualizar sozinho.
+      - name: Instalador (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          if (-not (Test-Path "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe")) {
+              choco install innosetup -y --no-progress
+          }
+          ./installer/build.ps1 -NoBuild -BinDir "dist/$env:PKG"
+
+      - name: Smoke test do instalador (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $setup = "dist/$env:PKG-setup.exe"
+          Start-Process $setup -ArgumentList '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART' -Wait
+          $dir = "$env:LOCALAPPDATA\Programs\Ampero"
+          foreach ($exe in 'ampero-gui.exe', 'ampero.exe') {
+              if (-not (Test-Path "$dir\$exe")) { throw "$exe não foi instalado em $dir" }
+          }
+          $key = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\{50676992-6BAD-419D-914B-010B3C748C3B}_is1'
+          (Get-ItemProperty $key).InstallLocation
+          if (-not (& "$dir\ampero.exe" decode-log tests/fixtures/sync_excerpt.log | Select-String -Quiet 'K NIU DS')) {
+              throw 'a CLI instalada não decodificou o log de teste'
+          }
+
       - uses: actions/upload-artifact@v4
         with:
           name: ${{ env.PKG }}
-          path: client/dist/${{ env.PKG }}.*
+          path: |
+            client/dist/${{ env.PKG }}.*
+            client/dist/${{ env.PKG }}-setup.exe
           if-no-files-found: error
 
   release:

@@ -37,10 +37,22 @@ git pull
 
 | Pacote | Conteúdo |
 |---|---|
+| `ampero-X.Y.Z-windows-x64-setup.exe` | instalador do Windows (por usuário, sem admin; menu Iniciar e atalho opcional) |
 | `ampero-X.Y.Z-windows-x64.zip` | `ampero.exe`, `ampero-gui.exe` |
 | `ampero-X.Y.Z-linux-x64.tar.gz` | `ampero`, `ampero-gui` (precisa de ALSA e X11/Wayland) |
 | `ampero-X.Y.Z-macos-universal.tar.gz` | `ampero`, `ampero-gui` (Intel e Apple Silicon no mesmo binário) |
 | `SHA256SUMS` | checksums de todos os pacotes |
+
+### Atualização pelo próprio app
+
+Ao abrir, a GUI consulta a última release no GitHub. Se houver versão mais nova, aparece uma faixa com
+"Novidades" e **Atualizar e reiniciar**: o app baixa `ampero-X.Y.Z-windows-x64-setup.exe`, confere o SHA-256 com o
+`SHA256SUMS` da release, roda o instalador em silêncio (`/RESTARTAPP=1`) e fecha; o instalador abre a versão nova.
+Isso só vale para a cópia instalada pelo instalador (o app confere o `InstallLocation` no registro). Cópias do zip,
+no macOS e no Linux recebem um botão para a página da release. O menu ⚙ também tem "Verificar atualizações".
+
+Para testar o instalador localmente: `powershell -ExecutionPolicy Bypass -File client/installer/build.ps1`
+(precisa do Inno Setup: `winget install -e --id JRSoftware.InnoSetup`).
 
 Versionamento: [SemVer](https://semver.org/lang/pt-BR/). Use `0.x.y` enquanto o protocolo e a interface ainda mudam.
 
