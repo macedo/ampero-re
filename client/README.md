@@ -54,37 +54,43 @@ egui/eframe, um binário nativo por SO. Ao abrir, conecta e sincroniza sozinha (
 Testado no Windows contra o aparelho: seleção, edição de parâmetro, troca de algoritmo, ON/OFF e salvar,
 sempre conferidos relendo o buffer ou ressincronizando.
 
-### Assistente de timbre (IA)
+### Montar timbres com o Claude (MCP)
 
-Painel à direita, recolhível (começa recolhido: « na faixa da direita abre, » recolhe), para conversar com um agente que monta timbres de
-músicas, bandas ou estilos usando **só o que o Ampero tem**:
+O Claude Desktop (ou o Claude Code) monta timbres de músicas, bandas ou estilos usando **só o que o Ampero tem**,
+por [MCP](https://modelcontextprotocol.io), com a conta do usuário (sem chave de API). Passo a passo para o usuário,
+com problemas comuns: [`docs/claude-mcp.md`](../docs/claude-mcp.md).
 
-- o agente consulta o catálogo por ferramentas (`listar_algoritmos`, `detalhar_algoritmo`, `preset_atual`) em vez de
-  receber os 435 algoritmos no prompt; as descrições da instalação oficial ajudam a ligar os nomes aos equipamentos
-  reais ("Marshell 800" = Marshall JCM800);
-- ele propõe o timbre com `propor_timbre`; a proposta é validada (algoritmo existe, parâmetro existe, valor dentro da
-  faixa) e os erros voltam ao agente para correção;
-- a proposta aparece como um card com **Aplicar no buffer**: troca algoritmos, liga/desliga blocos e ajusta os
-  parâmetros no buffer de edição. **Nada é salvo** sem você clicar em Salvar.
+1. Na GUI, menu ⚙ → **Conectar ao Claude…** → **Ligar**. A GUI aberta passa a atender em `127.0.0.1:47800`
+   (porta em `gui.json`); só programas desta máquina com o token de `mcp-token` (na pasta de configuração) entram,
+   e requisições de páginas web são recusadas. A barra superior sempre mostra uma bolinha **MCP**: verde ligado,
+   vermelho desligado, laranja com erro, piscando enquanto o Claude usa o servidor; clicar nela abre a mesma janela.
+2. Na mesma janela, **Configurar o Claude Desktop**: acrescenta `ampero` em `mcpServers` no
+   `claude_desktop_config.json` (com backup), apontando para `ampero mcp`. Feche o Claude Desktop pela bandeja e
+   abra de novo. No Claude Code: `claude mcp add ampero -- "<pasta do app>/ampero" mcp`.
+3. Peça no Claude: "monte no Ampero o timbre do solo de Comfortably Numb".
 
-Configuração ("Configurar" no painel), salva em `%APPDATA%\ampero\assistant.json` (Windows),
-`~/Library/Application Support/ampero/` (macOS) ou `~/.config/ampero/` (Linux):
+Ferramentas:
 
-| Provedor | Padrão | Chave |
-|---|---|---|
-| Claude (Anthropic) | `https://api.anthropic.com`, `claude-opus-5-5`, esforço `medium` | `ANTHROPIC_API_KEY` ou campo na configuração |
-| ChatGPT (OpenAI) | `https://api.openai.com/v1` (formato chat/completions) | `OPENAI_API_KEY` ou campo na configuração |
-| Outro compatível | `http://localhost:11434/v1` (Ollama), LM Studio, OpenRouter… | opcional |
+- `listar_algoritmos` e `detalhar_algoritmo` consultam o catálogo em vez de mandar os 435 algoritmos de uma vez; as
+  descrições da instalação oficial ajudam a ligar os nomes aos equipamentos reais ("Marshell 800" = Marshall JCM800);
+- `preset_atual` lê o buffer de edição da pedaleira;
+- `aplicar_timbre` exige o preset confirmado pelo usuário (`preset`, que precisa ser o carregado; o Claude pergunta
+  antes, e a ferramenta recusa se não bater), valida tudo (algoritmo existe, parâmetro existe, valor dentro da faixa; os erros voltam ao
+  Claude para correção) e só então troca algoritmos, liga/desliga blocos e ajusta parâmetros no buffer de edição.
+  **Nada é salvo** sem você clicar em Salvar.
 
-- O modelo é escolhido num seletor: começa com os modelos conhecidos do provedor, **Buscar na API** lista os que a
-  sua chave pode usar (`GET /v1/models` na Anthropic, `GET /models` no formato OpenAI) e **Outro…** aceita
-  qualquer nome digitado (útil no Ollama/LM Studio).
-- O prompt de sistema é editável (com "Restaurar padrão").
-- No Claude, o **fallback automático** do servidor vem ligado: se um classificador de segurança recusar o pedido, a
-  Anthropic refaz a resposta em outro modelo (`fallbacks: "default"`). Dá para desligar na configuração.
-- As chaves são das APIs (cobrança por uso), não das assinaturas dos chats. Se salvas na configuração, ficam em
-  texto puro no seu computador; deixe o campo vazio para usar a variável de ambiente.
-- Trocar provedor, modelo ou prompt começa uma conversa nova.
+Prompt padrão: o servidor manda **instruções** no handshake, que o Claude coloca no contexto enquanto o `ampero`
+estiver conectado (especialista em timbres, em português; lembrar o equipamento original, consultar o catálogo antes
+de escolher, aplicar só o que muda, resumir bloco/algoritmo/valores e dar dicas de execução). E há **prompts
+prontos**, no menu **+** do Claude Desktop:
+
+- **Montar timbre no Ampero:** música, banda ou estilo; trecho e guitarra são opcionais;
+- **Ajustar o timbre atual:** o que mudar (ex.: "mais encorpado nas bases");
+- **Explicar o preset atual:** bloco a bloco, com até três sugestões, sem aplicar nada.
+
+Quem fala com a pedaleira é a GUI, porque no Windows a porta MIDI é exclusiva: `ampero mcp` é só uma ponte stdio
+que responde o handshake sozinha e repassa as chamadas. Com a GUI fechada, as ferramentas avisam o Claude para
+pedir que você abra o app.
 
 `assets/params.json` é gerado do `algorithm.xml` da instalação oficial:
 `deno run --allow-read --allow-write ../tools/gen_params.ts <algorithm.xml> assets/params.json`.
@@ -102,6 +108,7 @@ ampero select P29-1                # seleciona preset
 ampero set AMP 0 20                # Gain do AMP = 20 (só no buffer de edição, não salva)
 ampero decode-log LOG --json x     # decodifica um log do proxy winmm, sem aparelho
 ampero monitor 60                  # mostra tudo que a pedaleira envia por 60 s
+ampero mcp                         # ponte MCP (stdio) do Claude Desktop para a GUI aberta
 ampero diff                        # buffer de edição vs preset salvo, byte a byte
 ampero info AMP "Marshell 800"     # foto e descrição de um efeito (da instalação oficial)
 ```
@@ -127,6 +134,7 @@ do editor oficial e são idênticos nos 198 presets.
 | `src/device.rs` | conexão MIDI, request/response com timeout e retry, sync em chunks |
 | `src/logfile.rs` | leitura dos logs do proxy, usada em testes e na decodificação offline |
 | `src/params.rs` | metadados de parâmetros (nomes, faixas, opções) |
-| `src/assistant.rs` | assistente de timbre: configuração, ferramentas do agente, validação de propostas, Claude e chat/completions |
+| `src/mcp.rs` | servidor MCP: JSON-RPC, HTTP local com token, ponte stdio `ampero mcp`, configuração do Claude Desktop |
+| `src/timbre.rs` | ferramentas de timbre do MCP: catálogo, preset atual e validação de timbres |
 | `src/bin/ampero-gui/` | interface egui; `worker.rs` é a thread dona da conexão MIDI |
 | `tests/fixtures/` | trecho real de captura usado nos testes |
