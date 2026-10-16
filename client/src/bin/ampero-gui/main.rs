@@ -969,14 +969,25 @@ impl App {
                 self.tempo_editor(ui, cur);
                 ui.label(RichText::new("Tempo").weak());
                 ui.separator();
-                let mut volume = cur.volume.min(ampero::protocol::VOLUME_MAX);
-                let slider = egui::Slider::new(&mut volume, 0..=ampero::protocol::VOLUME_MAX)
-                    .trailing_fill(true);
-                if ui
-                    .add_sized([150.0, 18.0], slider)
-                    .on_hover_text("Volume do patch (0–99), igual ao editor oficial")
-                    .changed()
-                {
+                // slider sem o número embutido: dentro do layout da direita para a esquerda o egui punha o
+                // campo numérico por cima da trilha. O número vai num campo próprio, à direita do slider.
+                let max = ampero::protocol::VOLUME_MAX;
+                let mut volume = cur.volume.min(max);
+                let number = ui
+                    .add(egui::DragValue::new(&mut volume).range(0..=max).speed(0.25))
+                    .on_hover_text("Clique para digitar o volume (0–99)");
+                let slider = ui
+                    .scope(|ui| {
+                        ui.spacing_mut().slider_width = 130.0;
+                        ui.add(
+                            egui::Slider::new(&mut volume, 0..=max)
+                                .show_value(false)
+                                .trailing_fill(true),
+                        )
+                    })
+                    .inner
+                    .on_hover_text("Volume do patch (0–99), igual ao editor oficial");
+                if (number.changed() || slider.changed()) && volume != cur.volume {
                     cur.volume = volume;
                     self.send(Cmd::SetVolume(volume));
                 }
