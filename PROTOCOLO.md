@@ -63,8 +63,10 @@ Ferramentas: `tools/extract_presets.awk` (log → hex) e `tools/decode_preset.aw
 | `0x000` | 2 | banco, slot | `01 54` = P29-1 |
 | `0x002` | 2 | Patch Volume | u16 BE (45 = `00 2D`) |
 | `0x004` | 16 | nome | ASCII, padding `00` |
-| `0x014` | 12 | ? | varia entre presets (`01`,`04`,`08`,`0C`) — provavelmente modos de CTRL/footswitch |
-| `0x020` | 7 | ? cabeçalho do EXP | |
+| `0x014` | 6 | ? | varia entre presets; ainda não decodificado |
+| `0x01A` | 9 | **alvos do CTRL** | um byte por bloco, na ordem de armazenamento (FX1 … RVB): bit n = o CTRL n+1 liga/desliga o bloco. P33-3: FX1 = `04` (CTRL 3), DLY = `08` (CTRL 4). Capturado em 2026-10-16 |
+| `0x023` | 1 | **funções dos CTRL 1–4** | 2 bits por CTRL (CTRL 1 nos bits 0–1 …): 0 = Module/Tap, 1 = Tap Tempo, 2 = EXP 1 On/Off. Conferido só no CTRL 3 (Tap Tempo = `10`) |
+| `0x024` | 3 | ? cabeçalho do EXP | |
 | `0x027` | 8×7 | **atribuições do EXP** | `[slot][alg_hi][alg_lo][param][min][max][?]`; slot 0 = vazio. P01-1: FX1/Classic PS/param 1 (Position) 0..100 |
 | `0x05F` | 9×33 | **blocos** | ver abaixo, na ordem de armazenamento FX1 FX2 AMP NR CAB EQ FX3 DLY RVB |
 | `0x188` | 2 | ? | `00 00` |
@@ -72,7 +74,7 @@ Ferramentas: `tools/extract_presets.awk` (log → hex) e `tools/decode_preset.aw
 | `0x18C` | 3×4 | **Quick Knobs** | `[módulo][alg_hi][alg_lo][param]`; módulo = índice do bloco + 3 (FX1=3 … RVB=11), 2 = nível de patch? |
 | `0x198` | 2 | ? | flag 0/1 |
 | `0x19A` | 9×2 | **ordem da cadeia** | byte par = **posição** de cada bloco, na ordem de armazenamento FX1 FX2 AMP NR CAB EQ FX3 DLY RVB (`00 01 02 04 03 …` = FX1 FX2 AMP CAB NR …; com o FX3 antes do FX2: `00 02 03 05 04 06 01 07 08`). Na ordem padrão ler como "bloco de cada posição" dá o mesmo resultado, o que escondeu isto até 2026-10-16. Byte ímpar quase sempre 0 |
-| `0x1AB` | 1 | **estado dos CTRL** | bitmask; uma apertada do CTRL no P01-1 levou de `00` a `08` (e ligou o DLY). É o valor da notificação `02 06 23 VV` |
+| `0x1AB` | 1 | **estado dos CTRL** | bitmask, bit n = CTRL n+1 acionado (`08` = CTRL 4); uma apertada do CTRL no P01-1 levou de `00` a `08` (e ligou o DLY). É o valor da notificação `02 06 23 VV` |
 | `0x1AC` | 1 | Vol Position? | 1 = Pre, 0 = Post bate com P01-1 e P29-1, mas o byte também muda pela notificação `02 06 24 00 VV` (footswitch); pode ser outro estado de CTRL |
 | `0x1AD` | 1 | ? | sempre `01` |
 | `0x1AE` | 1 | ? | flag 0/1 |
@@ -109,6 +111,8 @@ Números de 14 bits usam 2 bytes de 7 bits (`hi lo`, valor = `hi*128 + lo`).
 | Patch Volume | `B5 07 VV` | CC 7, 0–99 (o editor limita em 99). Capturado em 2026-10-16 no P29-1: 48 = `30`, 45 = `2D`, máx. `63` |
 | Patch Tempo | `B5 49 HH` + `B5 4A LL` | CC 73 = 7 bits altos, CC 74 = 7 bits baixos do BPM (40–250): 125 = `00 7D`, 150 = `01 16`, 250 = `01 7A`, 40 = `00 28` |
 | Ordem da cadeia | `F0 … 12 00 02 06 0D P0 … P8 F7` | posição (0–8) de cada bloco, na ordem de armazenamento, sem checksum; o mesmo formato do `0x19A`. Ler: `11 00 02 06 0D` → resposta `12 00 02 06 0D P0 … P8`. O editor oficial deixa qualquer ordem (até o CAB antes de tudo). Capturado no "Manage Signal Chain" em 2026-10-16 |
+| Alvos do CTRL | `F0 … 12 00 00 00 BB VV F7` | BB = bloco (índice de armazenamento), VV = máscara dos CTRL que o ligam/desligam (bit n = CTRL n+1), sem checksum. EQ no CTRL 3 = `05 04`. Capturado no CTRL/EXP em 2026-10-16 |
+| Função de um CTRL | `F0 … 12 00 02 06 06 00 FF F7` | visto só para o CTRL 3 (`00 01` = Tap Tempo, `00 00` = Module/Tap); o código dos outros CTRL ainda não foi capturado |
 | Outros CCs vistos | `B5 3D 63` | CC61 — a investigar |
 
 ### SysEx de edição (`OP=12`, `G1=10`)
@@ -174,10 +178,11 @@ Com pipelining (se o firmware aceitar), menos ainda.
 ## Pendências
 
 - [x] Mapear a estrutura dos 459 bytes do preset.
-- [ ] Preset: bytes 0x014–0x026 (CTRL/EXP), 0x198, 0x1AE, params 5–6 do CAB; confirmar Vol Position.
+- [x] Preset: alvos (0x01A) e funções (0x023) dos CTRL.
+- [ ] Preset: bytes 0x014–0x019 e 0x024–0x026 (EXP), 0x198, 0x1AE, params 5–6 do CAB; confirmar Vol Position.
 - [x] Capturar ações: trocar preset, girar knob, liga/desliga bloco, trocar algoritmo, salvar.
 - [x] Capturar: patch volume e patch tempo (CCs 7 e 73/74), ordem da cadeia (`02 06 0D`).
-- [ ] Capturar: renomear (só o nome, sem salvar), CAB/IR, global EQ, tuner, CTRL/EXP, import/export.
+- [ ] Capturar: renomear (só o nome, sem salvar), CAB/IR, global EQ, tuner, EXP e função dos CTRL 1, 2 e 4, import/export.
 - [ ] Significado de `07 18 01 40` no cabeçalho `0C` e do payload de `02 09`.
 - [ ] Mensagens curtas (CC) enviadas pelo app.
 - [ ] Testar se o firmware aceita pedidos em pipeline.

@@ -35,6 +35,11 @@ pub enum Cmd {
     SetTempo(u16),
     /// Ordem da cadeia: índices de armazenamento (FX1=0 … RVB=8) na ordem do sinal.
     SetChain(Vec<usize>),
+    /// Quais CTRL ligam/desligam o bloco (máscara, bit n = CTRL n+1).
+    SetCtrlTargets {
+        block: usize,
+        mask: u8,
+    },
     Save {
         bank: u8,
         slot: u8,
@@ -268,6 +273,7 @@ fn handle(d: &mut Device, cmd: Cmd, emit: &impl Fn(Evt)) -> anyhow::Result<()> {
                 .ok_or_else(|| anyhow::anyhow!("ordem de cadeia inválida"))?;
             d.send(&msg)?;
         }
+        Cmd::SetCtrlTargets { block, mask } => d.send(&p::ctrl_targets(block, mask))?,
         Cmd::Save { bank, slot, name } => {
             d.send(&p::save_preset(bank, slot))?;
             d.send(&p::preset_name(bank, slot, &name))?;

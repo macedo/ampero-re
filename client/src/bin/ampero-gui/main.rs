@@ -44,6 +44,8 @@ struct App {
     current: Option<Preset>,
     selected_block: usize,
     confirm_save: bool,
+    /// Janela dos alvos do CTRL aberta (pelo indicador do cabeçalho).
+    show_ctrl: bool,
     /// Renomeando o preset no cabeçalho: texto em edição, erro de validação e pedido de foco.
     name_edit: Option<(u16, String)>,
     name_edit_error: Option<String>,
@@ -84,6 +86,7 @@ impl App {
             current: None,
             selected_block: 2,
             confirm_save: false,
+            show_ctrl: false,
             name_edit: None,
             name_edit_error: None,
             name_edit_focus: false,
@@ -162,21 +165,34 @@ impl App {
         match run_tool(name, args, &ctx) {
             ToolOutcome::Text(t) => (t, false),
             ToolOutcome::Error(e) => (e, true),
-            ToolOutcome::Apply(_, _) if self.current.is_none() => (
+            ToolOutcome::Apply(_, _, _) if self.current.is_none() => (
                 "A pedaleira não está conectada no app; nada foi aplicado.".into(),
                 true,
             ),
-            ToolOutcome::Apply(proposal, blocks) => {
+            ToolOutcome::Apply(proposal, blocks, ctrl) => {
                 let n = blocks.len();
+                // alvos dos CTRL antes dos blocos: o ReadCurrent no fim de apply_proposal relê tudo
+                for &(k, mask) in &ctrl {
+                    if let Some(cur) = self.current.as_mut() {
+                        cur.ctrl_targets[k] = mask;
+                    }
+                    self.send(Cmd::SetCtrlTargets { block: k, mask });
+                }
                 self.apply_proposal(blocks);
                 self.status = format!(
                     "Claude aplicou “{}” no buffer — salve para manter",
                     proposal.title
                 );
+                let ctrl_note = if ctrl.is_empty() {
+                    String::new()
+                } else {
+                    let names: Vec<&str> = proposal.ctrl.keys().map(String::as_str).collect();
+                    format!(" CTRL atualizados: {}.", names.join(", "))
+                };
                 (
                     format!(
-                        "Aplicado \"{}\" no buffer de edição ({n} bloco(s)). Não foi salvo: o usuário ouve e \
-                         salva pela pedaleira ou pelo app se gostar.",
+                        "Aplicado \"{}\" no buffer de edição ({n} bloco(s)).{ctrl_note} Não foi salvo: o usuário \
+                         ouve e salva pela pedaleira ou pelo app se gostar.",
                         proposal.title
                     ),
                     false,
@@ -220,6 +236,7 @@ impl App {
                 !same_sound(s, cur, &self.pedal_switched)
                     || s.name != cur.name
                     || (self.tempo_edited && s.tempo != cur.tempo)
+                    || s.ctrl_targets != cur.ctrl_targets
             })
     }
 
@@ -462,6 +479,7 @@ impl App {
                         flow_arrow(ui, card_h);
                     }
                     let k = MODULES.iter().position(|m| *m == name).unwrap_or(0);
+                    let ctrl_mask = cur.ctrl_targets[k];
                     let block = &mut cur.blocks[k];
                     let thumb = match (&self.resources, block.algorithm_name.as_deref()) {
                         (Some(res), Some(n)) => res.image_path(block.module, n),
@@ -544,7 +562,10 @@ impl App {
                                         )
                                         .frame(false),
                                     };
-                                    ui.add_sized([CARD_W, THUMB_H], picture);
+                                    let thumb_rect = ui.add_sized([CARD_W, THUMB_H], picture).rect;
+                                    // selo dos CTRL que ligam/desligam este bloco (só visual; edita-se
+                                    // na janela do CTRL, pelo indicador do cabeçalho)
+                                    ctrl_badge(ui, thumb_rect, ctrl_mask);
                                     // embaixo: nome do efeito
                                     let label = block.algorithm_name.as_deref().unwrap_or("?");
                                     let select = egui::Button::new(RichText::new(label).small())
@@ -1009,6 +1030,93 @@ impl App {
         }
     }
 
+    /// Janela "CTRL do preset": para cada CTRL 1–4, a função (só leitura) e os blocos que ele liga e desliga
+    /// (marcar/desmarcar vai na hora para o buffer de edição e deixa o preset "não salvo").
+    fn ctrl_window(&mut self, ctx: &egui::Context, cur: &mut Preset) {
+        if !self.show_ctrl {
+            return;
+        }
+        let mut open = true;
+        let mut changes: Vec<(usize, u8)> = Vec::new();
+        egui::Window::new(format!("CTRL do {} \"{}\"", cur.label, cur.name))
+            .id(egui::Id::new("ctrl-window"))
+            .open(&mut open)
+            .collapsible(false)
+            .resizable(false)
+            .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+            .show(ctx, |ui| {
+                ui.label(
+                    RichText::new("Marque os blocos que cada CTRL liga e desliga neste preset.")
+                        .weak(),
+                );
+                for ctrl in 1..=4u8 {
+                    let bit = 1u8 << (ctrl - 1);
+                    let function = cur.ctrl_functions[ctrl as usize - 1];
+                    ui.add_space(6.0);
+                    ui.horizontal(|ui| {
+                        ui.label(
+                            RichText::new(format!("CTRL {ctrl}"))
+                                .strong()
+                                .color(CTRL_BLUE),
+                        );
+                        let state = if cur.ctrl_state & bit != 0 {
+                            " · acionado"
+                        } else {
+                            ""
+                        };
+                        ui.label(
+                            RichText::new(format!(
+                                "função: {}{state}",
+                                ampero::preset::ctrl_function_name(function)
+                            ))
+                            .small()
+                            .weak(),
+                        )
+                        .on_hover_text("A função se muda no editor oficial (CTRL/EXP)");
+                    });
+                    if function != 0 {
+                        ui.label(
+                            RichText::new(
+                                "Com essa função, os blocos marcados não são alternados.",
+                            )
+                            .small()
+                            .weak(),
+                        );
+                    }
+                    // mesma disposição do editor oficial: ordem de armazenamento, 5 + 4 por linha
+                    egui::Grid::new(("ctrl-grid", ctrl))
+                        .num_columns(5)
+                        .show(ui, |ui| {
+                            for (k, module) in MODULES.iter().enumerate() {
+                                let mut on = cur.ctrl_targets[k] & bit != 0;
+                                if ui.checkbox(&mut on, *module).changed() {
+                                    changes.push((k, cur.ctrl_targets[k] ^ bit));
+                                }
+                                if k == 4 {
+                                    ui.end_row();
+                                }
+                            }
+                            ui.end_row();
+                        });
+                }
+                ui.add_space(6.0);
+                ui.label(
+                    RichText::new(
+                        "As mudanças vão na hora para a pedaleira; salve o preset para manter.",
+                    )
+                    .small()
+                    .weak(),
+                );
+            });
+        for (k, mask) in changes {
+            cur.ctrl_targets[k] = mask;
+            self.send(Cmd::SetCtrlTargets { block: k, mask });
+        }
+        if !open {
+            self.show_ctrl = false;
+        }
+    }
+
     fn header(&mut self, ui: &mut egui::Ui, cur: &mut Preset) {
         ui.horizontal(|ui| {
             ui.label(RichText::new(&cur.label).size(22.0).strong());
@@ -1063,13 +1171,21 @@ impl App {
                 ui.label(RichText::new("Volume").weak());
                 ui.separator();
                 // layout da direita para a esquerda: isto aparece à esquerda do volume/tempo
-                let (text, color) = if cur.ctrl_state != 0 {
-                    ("CTRL ON", accent(ui))
-                } else {
-                    ("CTRL off", Color32::from_gray(120))
+                // qual CTRL está acionado (0x1AB, bit n = CTRL n+1); clicar abre a janela dos alvos
+                let (text, color) = match ctrl_list(cur.ctrl_state & 0x0F) {
+                    Some(on) => (format!("{on} ON"), accent(ui)),
+                    None => ("CTRL off".to_string(), Color32::from_gray(120)),
                 };
-                ui.label(RichText::new(text).strong().color(color))
-                    .on_hover_text(format!("estado dos CTRL: 0x{:02X}", cur.ctrl_state));
+                let resp = ui
+                    .add(
+                        egui::Label::new(RichText::new(text).strong().color(color))
+                            .sense(egui::Sense::click()),
+                    )
+                    .on_hover_cursor(egui::CursorIcon::PointingHand)
+                    .on_hover_text("Clique para escolher os blocos que cada CTRL liga e desliga");
+                if resp.clicked() {
+                    self.show_ctrl = true;
+                }
             });
         });
     }
@@ -1112,6 +1228,7 @@ impl eframe::App for App {
             self.chain(ui, &mut cur);
             ui.separator();
             egui::ScrollArea::vertical().show(ui, |ui| self.block_editor(ui, &mut cur));
+            self.ctrl_window(&ctx, &mut cur);
 
             if self.confirm_save {
                 egui::Window::new("Salvar preset")
@@ -1141,6 +1258,30 @@ impl eframe::App for App {
             self.current = Some(cur);
         });
     }
+}
+
+/// Azul dos CTRL (selo dos cards, janela e indicador): distinto do dourado do ON e legível nos dois temas.
+const CTRL_BLUE: Color32 = Color32::from_rgb(55, 138, 221);
+
+/// Texto dos CTRL de uma máscara (bit n = CTRL n+1): "CTRL 4", "CTRL 3·4".
+fn ctrl_list(mask: u8) -> Option<String> {
+    let ctrls: Vec<String> = (1..=4u8)
+        .filter(|c| mask & (1 << (c - 1)) != 0)
+        .map(|c| c.to_string())
+        .collect();
+    (!ctrls.is_empty()).then(|| format!("CTRL {}", ctrls.join("·")))
+}
+
+/// Selo no canto da miniatura do card com os CTRL que ligam/desligam o bloco.
+fn ctrl_badge(ui: &egui::Ui, thumb: egui::Rect, mask: u8) {
+    let Some(text) = ctrl_list(mask) else { return };
+    let font = egui::FontId::proportional(10.0);
+    let galley = ui.painter().layout_no_wrap(text, font, Color32::WHITE);
+    let size = galley.size() + egui::vec2(8.0, 2.0);
+    let rect = egui::Rect::from_min_size(thumb.right_top() - egui::vec2(size.x, 0.0), size);
+    ui.painter().rect_filled(rect, 4.0, CTRL_BLUE);
+    ui.painter()
+        .galley(rect.min + egui::vec2(4.0, 1.0), galley, Color32::WHITE);
 }
 
 /// Card arrastável **e clicável**. Igual ao `Ui::dnd_drag_source` do egui, só que com `Sense::click_and_drag`:

@@ -220,6 +220,15 @@ pub fn block_switch(storage_index: usize, on: bool) -> Vec<u8> {
     ]
 }
 
+/// Quais CTRL ligam/desligam o bloco `storage_index` (0 = FX1 … 8 = RVB): `mask` com bit n = CTRL n+1.
+/// Capturado do CTRL/EXP do editor oficial (EQ no CTRL 3 = `12 00 00 00 05 04`).
+pub fn ctrl_targets(storage_index: usize, mask: u8) -> Vec<u8> {
+    frame(
+        OP_WRITE,
+        &[0x00, 0x00, 0x00, (storage_index as u8).min(8), mask & 0x0F],
+    )
+}
+
 /// Ordem da cadeia do buffer de edição. `order` = índices de armazenamento (FX1=0 … RVB=8) na ordem em
 /// que o sinal passa; a mensagem leva a **posição de cada bloco**, na ordem de armazenamento (capturado do
 /// "Manage Signal Chain" do editor oficial). `None` se `order` não for uma permutação dos 9 blocos.
@@ -358,6 +367,23 @@ mod tests {
         // respostas de pedidos e MIDI curto não são notificações
         assert_eq!(n("F0 21 25 7F 4D 50 2D 64 12 00 00 05 00 01 00 F7"), None);
         assert_eq!(parse_notification(&hex("B6 08 00")), None);
+    }
+
+    #[test]
+    fn ctrl_targets_match_the_official_editor() {
+        let msg = |tail: [u8; 5]| {
+            [
+                &[0xF0, 0x21, 0x25, 0x7F, 0x4D, 0x50, 0x2D, 0x64, 0x12][..],
+                &tail[..],
+                &[0xF7],
+            ]
+            .concat()
+        };
+        // capturado em 2026-10-16 no P33-3: EQ e FX2 marcados e desmarcados no CTRL 3
+        assert_eq!(ctrl_targets(5, 0x04), msg([0x00, 0x00, 0x00, 0x05, 0x04]));
+        assert_eq!(ctrl_targets(5, 0x00), msg([0x00, 0x00, 0x00, 0x05, 0x00]));
+        assert_eq!(ctrl_targets(1, 0x04), msg([0x00, 0x00, 0x00, 0x01, 0x04]));
+        assert_eq!(ctrl_targets(7, 0x1F), msg([0x00, 0x00, 0x00, 0x07, 0x0F])); // só os 4 CTRL
     }
 
     #[test]

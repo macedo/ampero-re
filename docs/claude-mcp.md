@@ -36,6 +36,7 @@ Com o app do Ampero aberto (bolinha verde), converse normalmente com o Claude. E
 - "Quero a base de Back in Black. Minha guitarra é uma SG com humbuckers."
 - "Deixa o timbre atual mais encorpado nas bases."
 - "Explica o que cada bloco do preset atual está fazendo."
+- "Monta a base de Comfortably Numb e deixa o solo no CTRL."
 
 Também há **prompts prontos**, no botão **+** da caixa de mensagem do Claude Desktop, dentro de **ampero**:
 
@@ -57,7 +58,8 @@ Enquanto o Claude usa o Ampero, a bolinha **MCP** pisca. Quando ele aplica um ti
 ### O que o Claude pode e não pode fazer
 
 - **Pode:** consultar os efeitos, amplificadores e caixas que o Ampero tem, ler o preset carregado e mudar
-  algoritmos, ligar e desligar blocos e ajustar parâmetros **no buffer de edição**.
+  algoritmos, ligar e desligar blocos e ajustar parâmetros **no buffer de edição**. Também escolhe quais blocos cada
+  CTRL (footswitch) liga e desliga, por exemplo para deixar o boost e o delay do solo no seu CTRL.
 - **Salva só quando você pede**, no preset que você confirmar (veja abaixo).
 - **Não pode:** trocar de preset, gravar no banco de fábrica, apagar nada nem mexer no firmware. Tudo o que ele aplica é
   validado antes (algoritmo existe, parâmetro existe, valor dentro da faixa); se algo estiver errado, nada vai

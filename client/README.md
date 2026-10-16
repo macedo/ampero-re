@@ -50,6 +50,10 @@ egui/eframe, um binário nativo por SO. Ao abrir, conecta e sincroniza sozinha (
   `AMPERO_RESOURCES` com o caminho da pasta `Resource/Ampero`. Sem ela, a GUI funciona normalmente, só sem fotos.
 - Edições vão ao vivo para o buffer de edição. "não salvo" aparece quando o buffer difere do preset gravado.
   Liga/desliga feito pela pedaleira (CTRL, footswitch) é uso ao vivo e não conta como edição.
+- **CTRL:** os cards mostram um selo azul nos blocos que algum CTRL liga e desliga (ex.: "CTRL 4"). O indicador do
+  cabeçalho mostra qual CTRL está acionado e, ao clicar, abre a janela do CTRL: para cada CTRL 1–4, a função (só
+  leitura) e caixas para marcar os blocos que ele liga e desliga. As mudanças vão na hora para a pedaleira e marcam
+  "não salvo".
 - No cabeçalho, **Volume** do patch num knob compacto (0–99; arraste para cima/direita ou role a roda; Shift = fino)
   com o número clicável para digitar, e **Tempo** clicável como o nome (40–250 BPM; Enter confirma,
   Esc cancela); os dois vão na hora para o buffer de edição. Tap tempo feito na pedaleira não conta como "não salvo".
@@ -114,6 +118,7 @@ ampero ports                       # lista portas MIDI
 ampero sync --json presets.json    # lê nomes + 198 presets e mede o tempo
 ampero show P29-1                  # lê um preset do banco de usuário
 ampero current                     # buffer de edição (inclui alterações não salvas)
+ampero dump P33-3                  # os 459 bytes crus do preset em hexa (sem argumento: o buffer de edição)
 ampero select P29-1                # seleciona preset
 ampero set AMP 0 20                # Gain do AMP = 20 (só no buffer de edição, não salva)
 ampero decode-log LOG --json x     # decodifica um log do proxy winmm, sem aparelho
