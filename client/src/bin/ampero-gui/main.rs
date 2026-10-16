@@ -444,9 +444,25 @@ impl App {
             ..Default::default()
         });
         let mut card_rects: Vec<egui::Rect> = Vec::new();
+        // Centraliza a faixa quando ela cabe: usa a largura medida no frame anterior e, se ela mudou,
+        // pede uma passada extra ao egui (como `widgets::centered_row`).
+        let width_id = memory.with("strip-width");
+        let height_id = memory.with("card-height");
+        let card_h: f32 = ui.data(|d| d.get_temp(height_id)).unwrap_or(20.0);
+        let last_width: f32 = ui.data(|d| d.get_temp(width_id)).unwrap_or(0.0);
+        let pad = ((ui.available_width() - last_width) / 2.0).max(0.0);
         let out = area.show(ui, |ui| {
             ui.horizontal(|ui| {
+                // espaço pequeno: a seta já separa um card do outro
+                let card_spacing = ui.spacing().item_spacing.x;
+                ui.spacing_mut().item_spacing.x = 3.0;
+                ui.add_space(pad);
+                let start = ui.cursor().left();
+                flow_arrow(ui, card_h); // entrada
                 for (pos, name) in cur.chain.clone().into_iter().enumerate() {
+                    if pos > 0 {
+                        flow_arrow(ui, card_h);
+                    }
                     let k = MODULES.iter().position(|m| *m == name).unwrap_or(0);
                     let block = &mut cur.blocks[k];
                     let thumb = match (&self.resources, block.algorithm_name.as_deref()) {
@@ -472,6 +488,7 @@ impl App {
                     // o card inteiro é arrastável (a posição na cadeia vai como carga); os botões de
                     // dentro continuam respondendo a clique
                     let card = ui.dnd_drag_source(egui::Id::new(("chain-card", k)), pos, |ui| {
+                        ui.spacing_mut().item_spacing.x = card_spacing; // dentro do card, o normal
                         egui::Frame::new()
                             .fill(fill)
                             .stroke(egui::Stroke::new(1.5, stroke))
@@ -551,6 +568,18 @@ impl App {
                     });
                     card_rects.push(card.response.rect);
                 }
+                flow_arrow(ui, card_h); // saída
+                if let Some(h) = card_rects.first().map(|r| r.height())
+                    && (h - card_h).abs() > 0.5
+                {
+                    ui.data_mut(|d| d.insert_temp(height_id, h));
+                    ui.ctx().request_discard("altura das setas da cadeia");
+                }
+                let width = ui.cursor().left() - start;
+                if (width - last_width).abs() > 0.5 {
+                    ui.data_mut(|d| d.insert_temp(width_id, width));
+                    ui.ctx().request_discard("centralizar cadeia");
+                }
                 self.chain_drop(ui, cur, &card_rects);
             });
         });
@@ -580,10 +609,11 @@ impl App {
         };
         // posição de inserção: quantos cards têm o centro à esquerda do ponteiro
         let insert = rects.iter().filter(|r| r.center().x < pointer.x).count();
-        let gap = ui.spacing().item_spacing.x / 2.0;
+        // a linha fica no meio do vão entre os cards (onde está a seta), ou logo fora das pontas
         let x = match insert {
-            0 => rects[0].left() - gap,
-            i => rects[i - 1].right() + gap,
+            0 => rects[0].left() - 4.0,
+            i if i == rects.len() => rects[i - 1].right() + 4.0,
+            i => (rects[i - 1].right() + rects[i].left()) / 2.0,
         };
         let (top, bottom) = (rects[0].top(), rects[0].bottom());
         ui.painter().line_segment(
@@ -1142,6 +1172,24 @@ impl eframe::App for App {
             self.current = Some(cur);
         });
     }
+}
+
+/// Seta do fluxo do sinal entre os cards da cadeia (e nas pontas: entrada e saída), como no editor oficial.
+/// `height` = altura dos cards (a do frame anterior), para a seta ficar no meio deles mesmo antes do
+/// primeiro card da linha.
+fn flow_arrow(ui: &mut egui::Ui, height: f32) {
+    let (rect, _) = ui.allocate_exact_size(egui::vec2(12.0, height), egui::Sense::hover());
+    let c = rect.center();
+    let color = ui.visuals().weak_text_color();
+    ui.painter().add(egui::Shape::convex_polygon(
+        vec![
+            egui::pos2(c.x - 3.5, c.y - 5.5),
+            egui::pos2(c.x + 4.0, c.y),
+            egui::pos2(c.x - 3.5, c.y + 5.5),
+        ],
+        color,
+        egui::Stroke::NONE,
+    ));
 }
 
 /// Compara o que afeta o som (blocos, cadeia, volume), ignorando metadados e o liga/desliga
