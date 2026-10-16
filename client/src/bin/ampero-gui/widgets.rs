@@ -509,6 +509,80 @@ pub fn segmented(ui: &mut egui::Ui, value: &mut u16, options: &[&str], act: bool
     changed
 }
 
+/// Estado de um número "clique para digitar" (volume, tempo): o texto em edição pertence a um preset
+/// (`owner`), para não cair noutro se o preset trocar com o campo aberto.
+#[derive(Default)]
+pub struct NumberEdit {
+    edit: Option<(u16, String)>,
+    error: bool,
+    focus: bool,
+}
+
+/// Mostra `value` (com `suffix`) como texto clicável; o clique abre um campo só de digitar (sem arrastar),
+/// Enter confirma, Esc cancela e um valor fora de `range` fica marcado em vermelho. Devolve o valor novo
+/// quando confirmado e diferente do atual.
+pub fn number_edit(
+    ui: &mut egui::Ui,
+    state: &mut NumberEdit,
+    owner: u16,
+    value: u16,
+    range: std::ops::RangeInclusive<u16>,
+    suffix: &str,
+    hover: &str,
+) -> Option<u16> {
+    if state.edit.as_ref().is_some_and(|(o, _)| *o != owner) {
+        *state = NumberEdit::default();
+    }
+    let Some((_, buf)) = state.edit.as_mut() else {
+        let text = egui::RichText::new(format!("{value}{suffix}")).strong();
+        let resp = ui
+            .add(egui::Label::new(text).sense(Sense::click()))
+            .on_hover_cursor(egui::CursorIcon::Text)
+            .on_hover_text(hover);
+        if resp.clicked() {
+            *state = NumberEdit {
+                edit: Some((owner, value.to_string())),
+                error: false,
+                focus: true,
+            };
+        }
+        return None;
+    };
+    if state.error {
+        ui.colored_label(
+            Color32::from_rgb(230, 110, 100),
+            format!("{} a {}", range.start(), range.end()),
+        );
+    }
+    let resp = ui.add(
+        egui::TextEdit::singleline(buf)
+            .char_limit(3)
+            .desired_width(36.0)
+            .horizontal_align(egui::Align::Center),
+    );
+    if std::mem::take(&mut state.focus) {
+        resp.request_focus();
+    }
+    if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+        state.edit = None;
+        return None;
+    }
+    if !resp.lost_focus() {
+        return None;
+    }
+    match buf.trim().parse::<u16>() {
+        Ok(v) if range.contains(&v) => {
+            state.edit = None;
+            (v != value).then_some(v)
+        }
+        _ => {
+            state.error = true;
+            state.focus = true;
+            None
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
