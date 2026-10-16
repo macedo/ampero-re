@@ -372,28 +372,42 @@ impl App {
             ui.selectable_value(&mut self.bank, 1, "User Patches");
             ui.selectable_value(&mut self.bank, 0, "Factory");
         });
-        ui.add(egui::TextEdit::singleline(&mut self.search).hint_text("Buscar…"));
+        ui.add(
+            egui::TextEdit::singleline(&mut self.search)
+                .hint_text("Buscar…")
+                .desired_width(f32::INFINITY),
+        );
         ui.separator();
         let needle = self.search.to_lowercase();
         let current = self.current.as_ref().map(|c| c.index);
         let mut clicked = None;
-        egui::ScrollArea::vertical().show(ui, |ui| {
-            for p in self.presets.iter().filter(|p| p.bank == self.bank) {
-                if !needle.is_empty()
-                    && !p.name.to_lowercase().contains(&needle)
-                    && !p.label.to_lowercase().contains(&needle)
-                {
-                    continue;
-                }
-                let text = RichText::new(format!("{}  {}", p.label, p.name)).monospace();
-                if ui
-                    .selectable_label(current == Some(p.index), text)
-                    .clicked()
-                {
-                    clicked = Some((p.bank, p.slot));
-                }
-            }
-        });
+        // A lista ocupa a largura do painel (barra de rolagem na borda dele) e corta nomes que não cabem,
+        // em vez de passar por baixo da barra e invadir a área central quando a fonte fica maior.
+        egui::ScrollArea::vertical()
+            .auto_shrink([false, false])
+            .show(ui, |ui| {
+                ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Truncate);
+                ui.with_layout(egui::Layout::top_down_justified(egui::Align::LEFT), |ui| {
+                    for p in self.presets.iter().filter(|p| p.bank == self.bank) {
+                        if !needle.is_empty()
+                            && !p.name.to_lowercase().contains(&needle)
+                            && !p.label.to_lowercase().contains(&needle)
+                        {
+                            continue;
+                        }
+                        let full = format!("{}  {}", p.label, p.name);
+                        let resp = ui.selectable_label(
+                            current == Some(p.index),
+                            RichText::new(&full).monospace(),
+                        );
+                        if resp.clicked() {
+                            clicked = Some((p.bank, p.slot));
+                        }
+                        // nome cortado: o completo aparece ao passar o mouse
+                        resp.on_hover_text(full);
+                    }
+                });
+            });
         if let Some((bank, slot)) = clicked {
             self.send(Cmd::Select { bank, slot });
         }
@@ -1029,6 +1043,7 @@ impl eframe::App for App {
         self.menu.mcp_window(&ctx, self.first_pass);
         egui::Panel::left("presets")
             .default_size(260.0)
+            .min_size(180.0)
             .show(ui, |ui| self.preset_list(ui));
         egui::CentralPanel::default().show(ui, |ui| {
             let Some(mut cur) = self.current.take() else {
