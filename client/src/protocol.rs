@@ -220,6 +220,25 @@ pub fn block_switch(storage_index: usize, on: bool) -> Vec<u8> {
     ]
 }
 
+pub const VOLUME_MAX: u16 = 99;
+pub const TEMPO_MIN: u16 = 40;
+pub const TEMPO_MAX: u16 = 250;
+
+/// Patch Volume do buffer de edição: CC 7 (0–99), capturado do editor oficial.
+pub fn patch_volume(volume: u16) -> Vec<u8> {
+    vec![0xB0 | MIDI_CHANNEL, 0x07, volume.min(VOLUME_MAX) as u8]
+}
+
+/// Patch Tempo do buffer de edição (40–250 BPM): CC 73 com os 7 bits altos e CC 74 com os baixos,
+/// capturado do editor oficial (150 BPM = `49 01` + `4A 16`).
+pub fn patch_tempo(bpm: u16) -> [Vec<u8>; 2] {
+    let bpm = bpm.clamp(TEMPO_MIN, TEMPO_MAX);
+    [
+        vec![0xB0 | MIDI_CHANNEL, 73, (bpm >> 7) as u8],
+        vec![0xB0 | MIDI_CHANNEL, 74, (bpm & 0x7F) as u8],
+    ]
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -320,6 +339,34 @@ mod tests {
         // respostas de pedidos e MIDI curto não são notificações
         assert_eq!(n("F0 21 25 7F 4D 50 2D 64 12 00 00 05 00 01 00 F7"), None);
         assert_eq!(parse_notification(&hex("B6 08 00")), None);
+    }
+
+    #[test]
+    fn patch_volume_and_tempo_match_the_official_editor() {
+        // capturado em 2026-10-16 no P29-1: volume 48 / 45 / 99 (máx.), tempo 125 / 150 / 120 / 250 / 40
+        assert_eq!(patch_volume(48), [0xB5, 0x07, 0x30]);
+        assert_eq!(patch_volume(45), [0xB5, 0x07, 0x2D]);
+        assert_eq!(patch_volume(500), [0xB5, 0x07, 0x63]);
+        assert_eq!(
+            patch_tempo(125),
+            [vec![0xB5, 0x49, 0x00], vec![0xB5, 0x4A, 0x7D]]
+        );
+        assert_eq!(
+            patch_tempo(150),
+            [vec![0xB5, 0x49, 0x01], vec![0xB5, 0x4A, 0x16]]
+        );
+        assert_eq!(
+            patch_tempo(120),
+            [vec![0xB5, 0x49, 0x00], vec![0xB5, 0x4A, 0x78]]
+        );
+        assert_eq!(
+            patch_tempo(999),
+            [vec![0xB5, 0x49, 0x01], vec![0xB5, 0x4A, 0x7A]]
+        );
+        assert_eq!(
+            patch_tempo(1),
+            [vec![0xB5, 0x49, 0x00], vec![0xB5, 0x4A, 0x28]]
+        );
     }
 
     #[test]

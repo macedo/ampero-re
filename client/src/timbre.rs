@@ -234,7 +234,42 @@ pub fn tool_specs() -> Vec<ToolSpec> {
                 "required": ["preset", "title", "explanation", "blocks"]
             }),
         },
+        ToolSpec {
+            name: "salvar_preset",
+            description: "Grava o buffer de edição no preset carregado (só no banco de usuário), substituindo o que \
+                          está gravado nele. Só chame depois de perguntar e o usuário confirmar explicitamente o \
+                          preset (rótulo e nome) em que vai gravar; passe esse rótulo em `preset`. Opcionalmente \
+                          troca o nome (até 16 caracteres ASCII, sem acentos).",
+            schema: json!({
+                "type": "object",
+                "properties": {
+                    "preset": {"type": "string", "description": "Rótulo do preset em que o usuário confirmou gravar (ex.: \"P29-1\"); precisa ser o carregado agora"},
+                    "nome": {"type": "string", "description": "Nome novo do preset (opcional; até 16 caracteres ASCII, sem acentos)"}
+                },
+                "required": ["preset"]
+            }),
+        },
     ]
+}
+
+/// Nome de preset aceito pelo aparelho: até 16 caracteres ASCII visíveis (espaço incluído).
+pub fn validate_preset_name(name: &str) -> Result<String, String> {
+    let name = name.trim();
+    if name.is_empty() {
+        return Err("o nome não pode ficar vazio".into());
+    }
+    if let Some(c) = name.chars().find(|c| !(' '..='~').contains(c)) {
+        return Err(format!(
+            "o nome só aceita letras sem acento, números e símbolos ASCII (\"{c}\" não vale)"
+        ));
+    }
+    if name.len() > 16 {
+        return Err(format!(
+            "o nome tem {} caracteres; o máximo é 16",
+            name.len()
+        ));
+    }
+    Ok(name.to_string())
 }
 
 /// O que as ferramentas podem consultar.
@@ -255,24 +290,50 @@ fn describe_preset(p: &Preset) -> String {
     format!("{} \"{}\" ({bank})", p.label, p.name)
 }
 
-/// Confere se o preset que o usuário confirmou é o carregado agora. `Err` explica o que fazer.
-fn check_target(input: &Value, ctx: &ToolContext) -> Result<(), String> {
+#[derive(Clone, Copy, PartialEq)]
+enum Action {
+    Apply,
+    Save,
+}
+
+/// Confere se o preset que o usuário confirmou é o carregado agora (e, para salvar, se é do banco de
+/// usuário). `Err` explica ao Claude o que perguntar ou pedir.
+fn check_target<'a>(
+    input: &Value,
+    ctx: &ToolContext<'a>,
+    action: Action,
+) -> Result<&'a Preset, String> {
+    let (done, verb) = match action {
+        Action::Apply => ("aplicado", "aplicar"),
+        Action::Save => ("salvo", "salvar"),
+    };
     let current = ctx
         .preset
-        .ok_or("A pedaleira não está conectada no app; nada foi aplicado.")?;
+        .ok_or_else(|| format!("A pedaleira não está conectada no app; nada foi {done}."))?;
+    if action == Action::Save && current.bank == 0 {
+        return Err(format!(
+            "Nada foi salvo: {} é do banco de fábrica, que não pode ser gravado. Peça ao usuário para \
+             selecionar um preset do banco de usuário.",
+            describe_preset(current)
+        ));
+    }
     let asked = input
         .get("preset")
         .and_then(Value::as_str)
         .map(str::trim)
         .unwrap_or("");
-    let unsaved = if ctx.unsaved {
-        " Atenção: ele tem alterações não salvas, que serão substituídas; avise o usuário."
-    } else {
-        ""
+    let warning = match action {
+        Action::Apply if ctx.unsaved => {
+            " Atenção: ele tem alterações não salvas, que serão substituídas; avise o usuário."
+        }
+        Action::Save => {
+            " Avise que salvar substitui o que está gravado nele e que não dá para desfazer pelo app."
+        }
+        Action::Apply => "",
     };
     if asked.is_empty() {
         return Err(format!(
-            "Nada foi aplicado. Pergunte ao usuário em qual preset aplicar: o carregado agora é {}.{unsaved} \
+            "Nada foi {done}. Pergunte ao usuário em qual preset {verb}: o carregado agora é {}.{warning} \
              Depois da confirmação, chame de novo com preset: \"{}\".",
             describe_preset(current),
             current.label
@@ -280,19 +341,24 @@ fn check_target(input: &Value, ctx: &ToolContext) -> Result<(), String> {
     }
     if !asked.eq_ignore_ascii_case(&current.label) {
         return Err(format!(
-            "Nada foi aplicado: o preset carregado é {}, não {asked}. Peça ao usuário para selecionar {asked} \
-             na pedaleira ou no app (você não troca de preset), ou para confirmar que quer aplicar em {}.",
+            "Nada foi {done}: o preset carregado é {}, não {asked}. Peça ao usuário para selecionar {asked} \
+             na pedaleira ou no app (você não troca de preset), ou para confirmar que quer {verb} em {}.",
             describe_preset(current),
             current.label
         ));
     }
-    Ok(())
+    Ok(current)
 }
 
 pub enum ToolOutcome {
     Text(String),
     /// `aplicar_timbre` válido: quem chamou aplica os blocos no buffer de edição.
     Apply(Proposal, Vec<ResolvedBlock>),
+    /// `salvar_preset` confirmado: quem chamou grava o buffer no preset carregado, com este nome.
+    Save {
+        label: String,
+        name: String,
+    },
     Error(String),
 }
 
@@ -453,13 +519,29 @@ pub fn run_tool(name: &str, input: &Value, ctx: &ToolContext) -> ToolOutcome {
         "aplicar_timbre" => match serde_json::from_value::<Proposal>(input.clone()) {
             Err(e) => ToolOutcome::Error(format!("formato inválido: {e}")),
             // o preset confirmado vem antes de validar o timbre: sem confirmação, nada segue
-            Ok(p) => match check_target(input, ctx).map(|()| resolve(&p)) {
+            Ok(p) => match check_target(input, ctx, Action::Apply).map(|_| resolve(&p)) {
                 Err(e) => ToolOutcome::Error(e),
                 Ok(Ok(blocks)) => ToolOutcome::Apply(p, blocks),
                 Ok(Err(errs)) => ToolOutcome::Error(format!(
                     "Nada foi aplicado. Corrija:\n- {}",
                     errs.join("\n- ")
                 )),
+            },
+        },
+        "salvar_preset" => match check_target(input, ctx, Action::Save) {
+            Err(e) => ToolOutcome::Error(e),
+            Ok(current) => match input.get("nome").and_then(Value::as_str) {
+                None => ToolOutcome::Save {
+                    label: current.label.clone(),
+                    name: current.name.clone(),
+                },
+                Some(n) => match validate_preset_name(n) {
+                    Ok(name) => ToolOutcome::Save {
+                        label: current.label.clone(),
+                        name,
+                    },
+                    Err(e) => ToolOutcome::Error(format!("Nada foi salvo: {e}.")),
+                },
             },
         },
         other => ToolOutcome::Error(format!("ferramenta desconhecida: {other}")),
@@ -493,6 +575,58 @@ mod tests {
             resources: None,
             unsaved,
         }
+    }
+
+    #[test]
+    fn salvar_preset_only_on_the_confirmed_user_preset() {
+        let p = p29();
+        let save = |args: Value, ctx: &ToolContext| run_tool("salvar_preset", &args, ctx);
+        // sem confirmação: pergunta, avisando que substitui o gravado
+        let ToolOutcome::Error(e) = save(json!({}), &with_preset(&p, false)) else {
+            panic!("esperava erro")
+        };
+        assert!(
+            e.contains("Nada foi salvo")
+                && e.contains("P29-1 \"Teste\"")
+                && e.contains("substitui"),
+            "{e}"
+        );
+        // preset errado
+        let ToolOutcome::Error(e) = save(json!({"preset": "P01-1"}), &with_preset(&p, false))
+        else {
+            panic!("esperava erro")
+        };
+        assert!(e.contains("não P01-1"), "{e}");
+        // confirmado: mantém o nome atual
+        let ToolOutcome::Save { label, name } =
+            save(json!({"preset": "P29-1"}), &with_preset(&p, false))
+        else {
+            panic!("esperava salvar")
+        };
+        assert_eq!((label.as_str(), name.as_str()), ("P29-1", "Teste"));
+        // com nome novo
+        let ToolOutcome::Save { name, .. } = save(
+            json!({"preset": "P29-1", "nome": "  Numb Solo "}),
+            &with_preset(&p, false),
+        ) else {
+            panic!("esperava salvar")
+        };
+        assert_eq!(name, "Numb Solo");
+        // nome inválido: nada é salvo
+        for bad in ["Ação", "", "um nome grande demais aqui"] {
+            assert!(matches!(
+                save(json!({"preset": "P29-1", "nome": bad}), &with_preset(&p, false)),
+                ToolOutcome::Error(e) if e.contains("Nada foi salvo")
+            ));
+        }
+        // banco de fábrica nunca
+        let mut factory = p29();
+        factory.bank = 0;
+        let ToolOutcome::Error(e) = save(json!({"preset": "P29-1"}), &with_preset(&factory, false))
+        else {
+            panic!("esperava erro")
+        };
+        assert!(e.contains("banco de fábrica"), "{e}");
     }
 
     #[test]

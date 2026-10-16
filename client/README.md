@@ -47,7 +47,10 @@ egui/eframe, um binário nativo por SO. Ao abrir, conecta e sincroniza sozinha (
   `AMPERO_RESOURCES` com o caminho da pasta `Resource/Ampero`. Sem ela, a GUI funciona normalmente, só sem fotos.
 - Edições vão ao vivo para o buffer de edição. "não salvo" aparece quando o buffer difere do preset gravado.
   Liga/desliga feito pela pedaleira (CTRL, footswitch) é uso ao vivo e não conta como edição.
-- Salvar (só no banco de usuário) pede confirmação.
+- No cabeçalho, **Volume** do patch num slider (0–99) e **Tempo** clicável como o nome (40–250 BPM; Enter confirma,
+  Esc cancela); os dois vão na hora para o buffer de edição. Tap tempo feito na pedaleira não conta como "não salvo".
+- Salvar (só no banco de usuário) pede confirmação. Clicar no nome do preset no cabeçalho abre um campo para renomear
+  (até 16 caracteres ASCII; Enter confirma, Esc cancela); o nome novo marca "não salvo" e é gravado no Salvar.
 - Mudanças feitas na pedaleira (CTRL, footswitches, knobs, pedal de expressão, troca de preset) aparecem na tela
   em tempo real. A barra superior mostra o último evento recebido, e o cabeçalho mostra o estado do CTRL.
 
@@ -77,7 +80,10 @@ Ferramentas:
 - `aplicar_timbre` exige o preset confirmado pelo usuário (`preset`, que precisa ser o carregado; o Claude pergunta
   antes, e a ferramenta recusa se não bater), valida tudo (algoritmo existe, parâmetro existe, valor dentro da faixa; os erros voltam ao
   Claude para correção) e só então troca algoritmos, liga/desliga blocos e ajusta parâmetros no buffer de edição.
-  **Nada é salvo** sem você clicar em Salvar.
+  Nada é salvo nessa etapa.
+- `salvar_preset` grava o buffer no preset carregado, só no banco de usuário e com o rótulo confirmado em `preset` (o
+  Claude pergunta "Salvar em P29-1 '…'? Isso substitui o que está gravado"); `nome` opcional renomeia (até 16
+  caracteres ASCII).
 
 Prompt padrão: o servidor manda **instruções** no handshake, que o Claude coloca no contexto enquanto o `ampero`
 estiver conectado (especialista em timbres, em português; lembrar o equipamento original, consultar o catálogo antes

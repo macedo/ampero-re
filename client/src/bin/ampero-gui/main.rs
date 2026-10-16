@@ -44,6 +44,16 @@ struct App {
     current: Option<Preset>,
     selected_block: usize,
     confirm_save: bool,
+    /// Renomeando o preset no cabeçalho: texto em edição, erro de validação e pedido de foco.
+    name_edit: Option<(u16, String)>,
+    name_edit_error: Option<String>,
+    name_edit_focus: bool,
+    /// Editando o tempo no cabeçalho (preset, texto), valor inválido e pedido de foco.
+    tempo_edit: Option<(u16, String)>,
+    tempo_edit_error: bool,
+    tempo_edit_focus: bool,
+    /// O tempo foi mudado pelo app (conta como "não salvo"; o tap tempo da pedaleira não conta).
+    tempo_edited: bool,
     /// Último evento recebido da pedaleira e quando chegou.
     activity: Option<(String, std::time::Instant)>,
     /// Blocos cujo liga/desliga foi feito na pedaleira (CTRL, footswitch): uso ao vivo, não conta como "não salvo".
@@ -75,6 +85,13 @@ impl App {
             current: None,
             selected_block: 2,
             confirm_save: false,
+            name_edit: None,
+            name_edit_error: None,
+            name_edit_focus: false,
+            tempo_edit: None,
+            tempo_edit_error: false,
+            tempo_edit_focus: false,
+            tempo_edited: false,
             activity: None,
             pedal_switched: [false; 9],
             resources: ampero::resources::Resources::locate(),
@@ -139,17 +156,10 @@ impl App {
     /// Executa uma ferramenta pedida por um cliente MCP (Claude Desktop/Claude Code). Devolve (texto, é erro).
     fn run_mcp_tool(&mut self, name: &str, args: &serde_json::Value) -> (String, bool) {
         use ampero::timbre::{ToolContext, ToolOutcome, run_tool};
-        // mesma regra do "não salvo" do cabeçalho
-        let unsaved = self.current.as_ref().is_some_and(|cur| {
-            self.presets
-                .iter()
-                .find(|p| p.index == cur.index)
-                .is_some_and(|s| !same_sound(s, cur, &self.pedal_switched))
-        });
         let ctx = ToolContext {
             preset: self.current.as_ref(),
             resources: self.resources.as_ref(),
-            unsaved,
+            unsaved: self.is_unsaved(),
         };
         match run_tool(name, args, &ctx) {
             ToolOutcome::Text(t) => (t, false),
@@ -174,7 +184,45 @@ impl App {
                     false,
                 )
             }
+            ToolOutcome::Save { label, name } => {
+                // run_tool já conferiu: preset carregado, banco de usuário e rótulo confirmado
+                let Some(cur) = self.current.as_mut() else {
+                    return (
+                        "A pedaleira não está conectada no app; nada foi salvo.".into(),
+                        true,
+                    );
+                };
+                cur.name = name.clone();
+                let (bank, slot) = (cur.bank, cur.slot);
+                self.send(Cmd::Save {
+                    bank,
+                    slot,
+                    name: name.clone(),
+                });
+                self.status = format!("Claude salvou {label} “{name}”");
+                (format!("Salvo em {label} \"{name}\"."), false)
+            }
         }
+    }
+
+    /// O buffer de edição carregado difere do preset gravado.
+    fn is_unsaved(&self) -> bool {
+        self.current
+            .as_ref()
+            .is_some_and(|cur| self.differs_from_saved(cur))
+    }
+
+    /// `cur` difere do preset gravado: som, nome editado no app ou tempo mudado pelo app. Liga/desliga e
+    /// tempo vindos da pedaleira (CTRL, footswitch, tap tempo) são uso ao vivo e não contam.
+    fn differs_from_saved(&self, cur: &Preset) -> bool {
+        self.presets
+            .iter()
+            .find(|p| p.index == cur.index)
+            .is_some_and(|s| {
+                !same_sound(s, cur, &self.pedal_switched)
+                    || s.name != cur.name
+                    || (self.tempo_edited && s.tempo != cur.tempo)
+            })
     }
 
     fn send(&self, cmd: Cmd) {
@@ -208,6 +256,7 @@ impl App {
                 Evt::Current(p) => {
                     if self.current.as_ref().map(|c| c.index) != Some(p.index) {
                         self.pedal_switched = [false; 9];
+                        self.tempo_edited = false;
                     }
                     // GUI aberta com o CTRL já acionado: as diferenças de liga/desliga vêm do CTRL.
                     if let Some(saved) = self.presets.iter().find(|s| s.index == p.index)
@@ -255,6 +304,7 @@ impl App {
                         *entry = cur.clone();
                     }
                     self.pedal_switched = [false; 9];
+                    self.tempo_edited = false;
                     self.status =
                         format!("Salvo em banco {bank} {}", ampero::preset::slot_label(slot));
                 }
@@ -322,28 +372,42 @@ impl App {
             ui.selectable_value(&mut self.bank, 1, "User Patches");
             ui.selectable_value(&mut self.bank, 0, "Factory");
         });
-        ui.add(egui::TextEdit::singleline(&mut self.search).hint_text("Buscar…"));
+        ui.add(
+            egui::TextEdit::singleline(&mut self.search)
+                .hint_text("Buscar…")
+                .desired_width(f32::INFINITY),
+        );
         ui.separator();
         let needle = self.search.to_lowercase();
         let current = self.current.as_ref().map(|c| c.index);
         let mut clicked = None;
-        egui::ScrollArea::vertical().show(ui, |ui| {
-            for p in self.presets.iter().filter(|p| p.bank == self.bank) {
-                if !needle.is_empty()
-                    && !p.name.to_lowercase().contains(&needle)
-                    && !p.label.to_lowercase().contains(&needle)
-                {
-                    continue;
-                }
-                let text = RichText::new(format!("{}  {}", p.label, p.name)).monospace();
-                if ui
-                    .selectable_label(current == Some(p.index), text)
-                    .clicked()
-                {
-                    clicked = Some((p.bank, p.slot));
-                }
-            }
-        });
+        // A lista ocupa a largura do painel (barra de rolagem na borda dele) e corta nomes que não cabem,
+        // em vez de passar por baixo da barra e invadir a área central quando a fonte fica maior.
+        egui::ScrollArea::vertical()
+            .auto_shrink([false, false])
+            .show(ui, |ui| {
+                ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Truncate);
+                ui.with_layout(egui::Layout::top_down_justified(egui::Align::LEFT), |ui| {
+                    for p in self.presets.iter().filter(|p| p.bank == self.bank) {
+                        if !needle.is_empty()
+                            && !p.name.to_lowercase().contains(&needle)
+                            && !p.label.to_lowercase().contains(&needle)
+                        {
+                            continue;
+                        }
+                        let full = format!("{}  {}", p.label, p.name);
+                        let resp = ui.selectable_label(
+                            current == Some(p.index),
+                            RichText::new(&full).monospace(),
+                        );
+                        if resp.clicked() {
+                            clicked = Some((p.bank, p.slot));
+                        }
+                        // nome cortado: o completo aparece ao passar o mouse
+                        resp.on_hover_text(full);
+                    }
+                });
+            });
         if let Some((bank, slot)) = clicked {
             self.send(Cmd::Select { bank, slot });
         }
@@ -770,15 +834,137 @@ impl App {
         }
     }
 
-    fn header(&mut self, ui: &mut egui::Ui, cur: &Preset) {
-        ui.horizontal(|ui| {
-            ui.label(
-                RichText::new(format!("{}  {}", cur.label, cur.name))
-                    .size(22.0)
-                    .strong(),
+    /// Nome do preset no cabeçalho: clicar abre um campo para renomear (Enter confirma, Esc cancela). O nome
+    /// novo deixa o preset "não salvo" e vai para a pedaleira junto com o Salvar, como no editor oficial.
+    fn name_editor(&mut self, ui: &mut egui::Ui, cur: &mut Preset) {
+        // a edição pertence ao preset em que começou: se ele trocou, descarta
+        if self
+            .name_edit
+            .as_ref()
+            .is_some_and(|(index, _)| *index != cur.index)
+        {
+            self.name_edit = None;
+            self.name_edit_error = None;
+        }
+        let Some((_, buf)) = self.name_edit.as_mut() else {
+            let text = RichText::new(&cur.name).size(22.0).strong();
+            if cur.bank == 0 {
+                ui.label(text)
+                    .on_hover_text("Presets de fábrica não podem ser renomeados");
+                return;
+            }
+            let resp = ui
+                .add(egui::Label::new(text).sense(egui::Sense::click()))
+                .on_hover_cursor(egui::CursorIcon::Text)
+                .on_hover_text("Clique para renomear");
+            if resp.clicked() {
+                self.name_edit = Some((cur.index, cur.name.clone()));
+                self.name_edit_error = None;
+                self.name_edit_focus = true;
+            }
+            return;
+        };
+        let resp = ui.add(
+            egui::TextEdit::singleline(buf)
+                .char_limit(16)
+                .font(egui::FontId::proportional(20.0))
+                .desired_width(230.0)
+                .hint_text("nome do preset"),
+        );
+        if std::mem::take(&mut self.name_edit_focus) {
+            resp.request_focus();
+        }
+        let escape = ui.input(|i| i.key_pressed(egui::Key::Escape));
+        if escape {
+            self.name_edit = None;
+        } else if resp.lost_focus() {
+            match ampero::timbre::validate_preset_name(buf) {
+                Ok(name) => {
+                    cur.name = name;
+                    self.name_edit = None;
+                }
+                Err(e) => {
+                    self.name_edit_error = Some(e);
+                    self.name_edit_focus = true;
+                }
+            }
+        }
+        if let Some(e) = &self.name_edit_error {
+            ui.colored_label(Color32::from_rgb(230, 110, 100), e);
+        } else if self.name_edit.is_some() {
+            ui.label(RichText::new("Enter confirma, Esc cancela").small().weak());
+        }
+    }
+
+    /// Tempo do preset: clicar abre um campo (40–250 BPM; Enter confirma, Esc cancela) e o valor vai na hora
+    /// para o buffer de edição.
+    fn tempo_editor(&mut self, ui: &mut egui::Ui, cur: &mut Preset) {
+        use ampero::protocol::{TEMPO_MAX, TEMPO_MIN};
+        if self
+            .tempo_edit
+            .as_ref()
+            .is_some_and(|(index, _)| *index != cur.index)
+        {
+            self.tempo_edit = None;
+            self.tempo_edit_error = false;
+        }
+        let Some((_, buf)) = self.tempo_edit.as_mut() else {
+            let resp = ui
+                .add(
+                    egui::Label::new(RichText::new(format!("{} BPM", cur.tempo)).strong())
+                        .sense(egui::Sense::click()),
+                )
+                .on_hover_cursor(egui::CursorIcon::Text)
+                .on_hover_text(format!(
+                    "Clique para mudar o tempo ({TEMPO_MIN}–{TEMPO_MAX} BPM)"
+                ));
+            if resp.clicked() {
+                self.tempo_edit = Some((cur.index, cur.tempo.to_string()));
+                self.tempo_edit_error = false;
+                self.tempo_edit_focus = true;
+            }
+            return;
+        };
+        if self.tempo_edit_error {
+            ui.colored_label(
+                Color32::from_rgb(230, 110, 100),
+                format!("{TEMPO_MIN} a {TEMPO_MAX}"),
             );
-            let saved = self.presets.iter().find(|p| p.index == cur.index);
-            if saved.is_some_and(|s| !same_sound(s, cur, &self.pedal_switched)) {
+        }
+        let resp = ui.add(
+            egui::TextEdit::singleline(buf)
+                .char_limit(3)
+                .desired_width(36.0)
+                .horizontal_align(egui::Align::Center),
+        );
+        if std::mem::take(&mut self.tempo_edit_focus) {
+            resp.request_focus();
+        }
+        if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+            self.tempo_edit = None;
+        } else if resp.lost_focus() {
+            match buf.trim().parse::<u16>() {
+                Ok(bpm) if (TEMPO_MIN..=TEMPO_MAX).contains(&bpm) => {
+                    if bpm != cur.tempo {
+                        cur.tempo = bpm;
+                        self.tempo_edited = true;
+                        self.send(Cmd::SetTempo(bpm));
+                    }
+                    self.tempo_edit = None;
+                }
+                _ => {
+                    self.tempo_edit_error = true;
+                    self.tempo_edit_focus = true;
+                }
+            }
+        }
+    }
+
+    fn header(&mut self, ui: &mut egui::Ui, cur: &mut Preset) {
+        ui.horizontal(|ui| {
+            ui.label(RichText::new(&cur.label).size(22.0).strong());
+            self.name_editor(ui, cur);
+            if self.differs_from_saved(cur) {
                 ui.label(RichText::new("não salvo").color(accent(ui)));
             }
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -790,12 +976,37 @@ impl App {
                 {
                     self.confirm_save = true;
                 }
-                ui.label(format!(
-                    "Volume {}   Tempo {} BPM   {}",
-                    cur.volume,
-                    cur.tempo,
-                    if cur.volume_pre { "Pre" } else { "Post" }
-                ));
+                ui.label(if cur.volume_pre { "Pre" } else { "Post" })
+                    .on_hover_text("Posição do volume do patch na cadeia");
+                ui.separator();
+                // da direita para a esquerda: o campo de tempo entra antes do rótulo "Tempo"
+                self.tempo_editor(ui, cur);
+                ui.label(RichText::new("Tempo").weak());
+                ui.separator();
+                // slider sem o número embutido: dentro do layout da direita para a esquerda o egui punha o
+                // campo numérico por cima da trilha. O número vai num campo próprio, à direita do slider.
+                let max = ampero::protocol::VOLUME_MAX;
+                let mut volume = cur.volume.min(max);
+                let number = ui
+                    .add(egui::DragValue::new(&mut volume).range(0..=max).speed(0.25))
+                    .on_hover_text("Clique para digitar o volume (0–99)");
+                let slider = ui
+                    .scope(|ui| {
+                        ui.spacing_mut().slider_width = 130.0;
+                        ui.add(
+                            egui::Slider::new(&mut volume, 0..=max)
+                                .show_value(false)
+                                .trailing_fill(true),
+                        )
+                    })
+                    .inner
+                    .on_hover_text("Volume do patch (0–99), igual ao editor oficial");
+                if (number.changed() || slider.changed()) && volume != cur.volume {
+                    cur.volume = volume;
+                    self.send(Cmd::SetVolume(volume));
+                }
+                ui.label(RichText::new("Volume").weak());
+                ui.separator();
                 // layout da direita para a esquerda: isto aparece à esquerda do volume/tempo
                 let (text, color) = if cur.ctrl_state != 0 {
                     ("CTRL ON", accent(ui))
@@ -832,6 +1043,7 @@ impl eframe::App for App {
         self.menu.mcp_window(&ctx, self.first_pass);
         egui::Panel::left("presets")
             .default_size(260.0)
+            .min_size(180.0)
             .show(ui, |ui| self.preset_list(ui));
         egui::CentralPanel::default().show(ui, |ui| {
             let Some(mut cur) = self.current.take() else {
@@ -840,7 +1052,7 @@ impl eframe::App for App {
                 });
                 return;
             };
-            self.header(ui, &cur);
+            self.header(ui, &mut cur);
             ui.separator();
             self.chain(ui, &mut cur);
             ui.separator();

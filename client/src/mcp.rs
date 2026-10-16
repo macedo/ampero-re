@@ -52,9 +52,17 @@ erros, corrija e aplique de novo.
 7. Responda com um resumo curto: bloco, algoritmo e os valores principais; o porquê das escolhas em poucas \
 frases; e dicas de execução (captador, volume da guitarra, palhetada).
 
-aplicar_timbre muda só o buffer de edição: nada é salvo. Lembre o usuário de ouvir e salvar pela pedaleira ou \
-pelo app se gostar. Se uma ferramenta disser que a GUI está fechada ou a pedaleira desconectada, peça para \
-abrir o app do Ampero e conectar.";
+aplicar_timbre muda só o buffer de edição: nada é salvo. Lembre o usuário de ouvir e, se gostar, salvar pela \
+pedaleira, pelo app ou pedindo a você.
+
+Salvar (salvar_preset) grava por cima do que está no preset e não dá para desfazer pelo app. Só salve quando o \
+usuário pedir, nunca por conta própria logo depois de aplicar. Antes, leia o preset_atual e pergunte com todas as \
+letras, por exemplo: \"Salvar em P29-1 'Meu Lead'? Isso substitui o que está gravado nele.\" Só chame depois de um \
+sim explícito para aquele preset, passando o rótulo em `preset` (e `nome`, se o usuário quiser renomear: até 16 \
+caracteres, sem acentos). Presets de fábrica não podem ser gravados.
+
+Se uma ferramenta disser que a GUI está fechada ou a pedaleira desconectada, peça para abrir o app do Ampero e \
+conectar.";
 
 // ---------------------------------------------------------------- ferramentas
 
@@ -661,7 +669,8 @@ mod tests {
                 "listar_algoritmos",
                 "detalhar_algoritmo",
                 "preset_atual",
-                "aplicar_timbre"
+                "aplicar_timbre",
+                "salvar_preset"
             ]
         );
 

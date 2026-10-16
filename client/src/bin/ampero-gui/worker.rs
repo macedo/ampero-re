@@ -29,6 +29,10 @@ pub enum Cmd {
         block: usize,
         on: bool,
     },
+    /// Patch Volume (0–99) do buffer de edição.
+    SetVolume(u16),
+    /// Patch Tempo (40–250 BPM) do buffer de edição.
+    SetTempo(u16),
     Save {
         bank: u8,
         slot: u8,
@@ -251,6 +255,12 @@ fn handle(d: &mut Device, cmd: Cmd, emit: &impl Fn(Evt)) -> anyhow::Result<()> {
             emit(Evt::Current(d.read_edit_buffer()?)); // parâmetros voltam aos padrões do algoritmo
         }
         Cmd::Switch { block, on } => d.send(&p::block_switch(block, on))?,
+        Cmd::SetVolume(v) => d.send(&p::patch_volume(v))?,
+        Cmd::SetTempo(bpm) => {
+            for msg in p::patch_tempo(bpm) {
+                d.send(&msg)?;
+            }
+        }
         Cmd::Save { bank, slot, name } => {
             d.send(&p::save_preset(bank, slot))?;
             d.send(&p::preset_name(bank, slot, &name))?;

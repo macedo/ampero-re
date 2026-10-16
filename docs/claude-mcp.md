@@ -24,7 +24,7 @@ no Ampero. Funciona com a sua conta do Claude, **sem chave de API**, usando o pa
 4. **Reinicie o Claude Desktop de verdade:** fechar a janela não basta. Clique com o botão direito no ícone do
    Claude na bandeja do sistema (perto do relógio), escolha **Sair** e abra de novo.
 5. **Confira:** numa conversa nova do Claude Desktop, o menu de ferramentas/conectores deve listar o **ampero** com
-   4 ferramentas: `listar_algoritmos`, `detalhar_algoritmo`, `preset_atual` e `aplicar_timbre`.
+   5 ferramentas: `listar_algoritmos`, `detalhar_algoritmo`, `preset_atual`, `aplicar_timbre` e `salvar_preset`.
 
 O servidor fica ligado nas próximas vezes que você abrir o app. Para desligar, use a mesma janela.
 
@@ -58,14 +58,25 @@ Enquanto o Claude usa o Ampero, a bolinha **MCP** pisca. Quando ele aplica um ti
 
 - **Pode:** consultar os efeitos, amplificadores e caixas que o Ampero tem, ler o preset carregado e mudar
   algoritmos, ligar e desligar blocos e ajustar parâmetros **no buffer de edição**.
-- **Não pode:** salvar presets, trocar de preset, apagar nada nem mexer no firmware. Tudo o que ele aplica é
+- **Salva só quando você pede**, no preset que você confirmar (veja abaixo).
+- **Não pode:** trocar de preset, gravar no banco de fábrica, apagar nada nem mexer no firmware. Tudo o que ele aplica é
   validado antes (algoritmo existe, parâmetro existe, valor dentro da faixa); se algo estiver errado, nada vai
   para a pedaleira e ele corrige.
 
 ### Gostou do timbre? Salve
 
-O que o Claude aplica fica só no buffer de edição: aparece "não salvo" no app. Para guardar, use **Salvar** no app
-(ou salve pela pedaleira) no preset que quiser. Se trocar de preset sem salvar, o timbre se perde.
+O que o Claude aplica fica só no buffer de edição: aparece "não salvo" no app. Para guardar, há três jeitos:
+
+- **Pedir ao Claude:** "salva" ou "salva com o nome Numb Solo". Ele lê o preset carregado e pergunta, com todas as
+  letras, algo como "Salvar em P29-1 'Meu Lead'? Isso substitui o que está gravado nele." Só grava depois do seu
+  sim. A ferramenta `salvar_preset` também recusa se o preset não for o carregado ou for do banco de fábrica, e o
+  nome aceita até 16 caracteres, sem acentos.
+- **No app:** botão **Salvar** (pede confirmação). Para renomear, clique no nome do preset no cabeçalho, digite e
+  aperte Enter (Esc cancela); o nome novo vai junto no próximo Salvar.
+- **Na pedaleira**, como sempre.
+
+Se trocar de preset sem salvar, o timbre se perde. Salvar grava por cima do que estava no preset; o app não tem
+"desfazer", então confirme o slot com calma.
 
 ## Problemas comuns
 
