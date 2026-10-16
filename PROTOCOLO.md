@@ -106,6 +106,8 @@ Números de 14 bits usam 2 bytes de 7 bits (`hi lo`, valor = `hi*128 + lo`).
 |---|---|---|
 | Selecionar preset | `B5 00 BB` + `C5 PP` | CC0 = banco, PC = `(N-1)*3 + (sub-1)`; P29-1 → `B5 00 01`, `C5 54` |
 | Liga/desliga bloco | `B5 CC 00` / `B5 CC 7F` | CC = 48 + índice de armazenamento: FX1=48 FX2=49 AMP=50 NR=51 CAB=52 EQ=53 FX3=54 DLY=55 RVB=56 (todos capturados) |
+| Patch Volume | `B5 07 VV` | CC 7, 0–99 (o editor limita em 99). Capturado em 2026-10-16 no P29-1: 48 = `30`, 45 = `2D`, máx. `63` |
+| Patch Tempo | `B5 49 HH` + `B5 4A LL` | CC 73 = 7 bits altos, CC 74 = 7 bits baixos do BPM (40–250): 125 = `00 7D`, 150 = `01 16`, 250 = `01 7A`, 40 = `00 28` |
 | Outros CCs vistos | `B5 3D 63` | CC61 — a investigar |
 
 ### SysEx de edição (`OP=12`, `G1=10`)
@@ -173,7 +175,8 @@ Com pipelining (se o firmware aceitar), menos ainda.
 - [x] Mapear a estrutura dos 459 bytes do preset.
 - [ ] Preset: bytes 0x014–0x026 (CTRL/EXP), 0x198, 0x1AE, params 5–6 do CAB; confirmar Vol Position.
 - [x] Capturar ações: trocar preset, girar knob, liga/desliga bloco, trocar algoritmo, salvar.
-- [ ] Capturar: renomear, mover/reordenar blocos, CAB/IR, global EQ, tuner, CTRL/EXP, import/export.
+- [x] Capturar: patch volume e patch tempo (CCs 7 e 73/74).
+- [ ] Capturar: renomear (só o nome, sem salvar), mover/reordenar blocos, CAB/IR, global EQ, tuner, CTRL/EXP, import/export.
 - [ ] Significado de `07 18 01 40` no cabeçalho `0C` e do payload de `02 09`.
 - [ ] Mensagens curtas (CC) enviadas pelo app.
 - [ ] Testar se o firmware aceita pedidos em pipeline.

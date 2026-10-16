@@ -48,6 +48,12 @@ struct App {
     name_edit: Option<(u16, String)>,
     name_edit_error: Option<String>,
     name_edit_focus: bool,
+    /// Editando o tempo no cabeçalho (preset, texto), valor inválido e pedido de foco.
+    tempo_edit: Option<(u16, String)>,
+    tempo_edit_error: bool,
+    tempo_edit_focus: bool,
+    /// O tempo foi mudado pelo app (conta como "não salvo"; o tap tempo da pedaleira não conta).
+    tempo_edited: bool,
     /// Último evento recebido da pedaleira e quando chegou.
     activity: Option<(String, std::time::Instant)>,
     /// Blocos cujo liga/desliga foi feito na pedaleira (CTRL, footswitch): uso ao vivo, não conta como "não salvo".
@@ -82,6 +88,10 @@ impl App {
             name_edit: None,
             name_edit_error: None,
             name_edit_focus: false,
+            tempo_edit: None,
+            tempo_edit_error: false,
+            tempo_edit_focus: false,
+            tempo_edited: false,
             activity: None,
             pedal_switched: [false; 9],
             resources: ampero::resources::Resources::locate(),
@@ -195,14 +205,24 @@ impl App {
         }
     }
 
-    /// O buffer difere do preset gravado: som (como no cabeçalho) ou nome editado no app.
+    /// O buffer de edição carregado difere do preset gravado.
     fn is_unsaved(&self) -> bool {
-        self.current.as_ref().is_some_and(|cur| {
-            self.presets
-                .iter()
-                .find(|p| p.index == cur.index)
-                .is_some_and(|s| !same_sound(s, cur, &self.pedal_switched) || s.name != cur.name)
-        })
+        self.current
+            .as_ref()
+            .is_some_and(|cur| self.differs_from_saved(cur))
+    }
+
+    /// `cur` difere do preset gravado: som, nome editado no app ou tempo mudado pelo app. Liga/desliga e
+    /// tempo vindos da pedaleira (CTRL, footswitch, tap tempo) são uso ao vivo e não contam.
+    fn differs_from_saved(&self, cur: &Preset) -> bool {
+        self.presets
+            .iter()
+            .find(|p| p.index == cur.index)
+            .is_some_and(|s| {
+                !same_sound(s, cur, &self.pedal_switched)
+                    || s.name != cur.name
+                    || (self.tempo_edited && s.tempo != cur.tempo)
+            })
     }
 
     fn send(&self, cmd: Cmd) {
@@ -236,6 +256,7 @@ impl App {
                 Evt::Current(p) => {
                     if self.current.as_ref().map(|c| c.index) != Some(p.index) {
                         self.pedal_switched = [false; 9];
+                        self.tempo_edited = false;
                     }
                     // GUI aberta com o CTRL já acionado: as diferenças de liga/desliga vêm do CTRL.
                     if let Some(saved) = self.presets.iter().find(|s| s.index == p.index)
@@ -283,6 +304,7 @@ impl App {
                         *entry = cur.clone();
                     }
                     self.pedal_switched = [false; 9];
+                    self.tempo_edited = false;
                     self.status =
                         format!("Salvo em banco {bank} {}", ampero::preset::slot_label(slot));
                 }
@@ -860,14 +882,75 @@ impl App {
         }
     }
 
+    /// Tempo do preset: clicar abre um campo (40–250 BPM; Enter confirma, Esc cancela) e o valor vai na hora
+    /// para o buffer de edição.
+    fn tempo_editor(&mut self, ui: &mut egui::Ui, cur: &mut Preset) {
+        use ampero::protocol::{TEMPO_MAX, TEMPO_MIN};
+        if self
+            .tempo_edit
+            .as_ref()
+            .is_some_and(|(index, _)| *index != cur.index)
+        {
+            self.tempo_edit = None;
+            self.tempo_edit_error = false;
+        }
+        let Some((_, buf)) = self.tempo_edit.as_mut() else {
+            let resp = ui
+                .add(
+                    egui::Label::new(RichText::new(format!("{} BPM", cur.tempo)).strong())
+                        .sense(egui::Sense::click()),
+                )
+                .on_hover_cursor(egui::CursorIcon::Text)
+                .on_hover_text(format!(
+                    "Clique para mudar o tempo ({TEMPO_MIN}–{TEMPO_MAX} BPM)"
+                ));
+            if resp.clicked() {
+                self.tempo_edit = Some((cur.index, cur.tempo.to_string()));
+                self.tempo_edit_error = false;
+                self.tempo_edit_focus = true;
+            }
+            return;
+        };
+        if self.tempo_edit_error {
+            ui.colored_label(
+                Color32::from_rgb(230, 110, 100),
+                format!("{TEMPO_MIN} a {TEMPO_MAX}"),
+            );
+        }
+        let resp = ui.add(
+            egui::TextEdit::singleline(buf)
+                .char_limit(3)
+                .desired_width(36.0)
+                .horizontal_align(egui::Align::Center),
+        );
+        if std::mem::take(&mut self.tempo_edit_focus) {
+            resp.request_focus();
+        }
+        if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+            self.tempo_edit = None;
+        } else if resp.lost_focus() {
+            match buf.trim().parse::<u16>() {
+                Ok(bpm) if (TEMPO_MIN..=TEMPO_MAX).contains(&bpm) => {
+                    if bpm != cur.tempo {
+                        cur.tempo = bpm;
+                        self.tempo_edited = true;
+                        self.send(Cmd::SetTempo(bpm));
+                    }
+                    self.tempo_edit = None;
+                }
+                _ => {
+                    self.tempo_edit_error = true;
+                    self.tempo_edit_focus = true;
+                }
+            }
+        }
+    }
+
     fn header(&mut self, ui: &mut egui::Ui, cur: &mut Preset) {
         ui.horizontal(|ui| {
             ui.label(RichText::new(&cur.label).size(22.0).strong());
             self.name_editor(ui, cur);
-            let saved = self.presets.iter().find(|p| p.index == cur.index);
-            if saved
-                .is_some_and(|s| !same_sound(s, cur, &self.pedal_switched) || s.name != cur.name)
-            {
+            if self.differs_from_saved(cur) {
                 ui.label(RichText::new("não salvo").color(accent(ui)));
             }
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -879,12 +962,26 @@ impl App {
                 {
                     self.confirm_save = true;
                 }
-                ui.label(format!(
-                    "Volume {}   Tempo {} BPM   {}",
-                    cur.volume,
-                    cur.tempo,
-                    if cur.volume_pre { "Pre" } else { "Post" }
-                ));
+                ui.label(if cur.volume_pre { "Pre" } else { "Post" })
+                    .on_hover_text("Posição do volume do patch na cadeia");
+                ui.separator();
+                // da direita para a esquerda: o campo de tempo entra antes do rótulo "Tempo"
+                self.tempo_editor(ui, cur);
+                ui.label(RichText::new("Tempo").weak());
+                ui.separator();
+                let mut volume = cur.volume.min(ampero::protocol::VOLUME_MAX);
+                let slider = egui::Slider::new(&mut volume, 0..=ampero::protocol::VOLUME_MAX)
+                    .trailing_fill(true);
+                if ui
+                    .add_sized([150.0, 18.0], slider)
+                    .on_hover_text("Volume do patch (0–99), igual ao editor oficial")
+                    .changed()
+                {
+                    cur.volume = volume;
+                    self.send(Cmd::SetVolume(volume));
+                }
+                ui.label(RichText::new("Volume").weak());
+                ui.separator();
                 // layout da direita para a esquerda: isto aparece à esquerda do volume/tempo
                 let (text, color) = if cur.ctrl_state != 0 {
                     ("CTRL ON", accent(ui))
