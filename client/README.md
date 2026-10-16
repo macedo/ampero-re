@@ -28,7 +28,10 @@ egui/eframe, um binário nativo por SO. Ao abrir, conecta e sincroniza sozinha (
 - Lista de presets (User / Factory) com busca. Clicar seleciona o preset no aparelho.
 - Cadeia de sinal na ordem real do preset, numa faixa horizontal de cards: tipo do bloco e botão ON/OFF
   (CC 48+bloco) em cima, miniatura do efeito no meio (esmaecida quando desligado) e nome embaixo. Quando não
-  cabe, a roda do mouse sobre a faixa rola os pedais na horizontal.
+  cabe, a roda do mouse sobre a faixa rola os pedais na horizontal; quando cabe, a faixa fica centralizada. Setas entre
+  os cards (e nas pontas, entrada e saída) mostram o caminho do sinal. **Arrastar um card** muda a ordem da cadeia (como o
+  "Manage Signal Chain" do editor oficial): uma linha dourada mostra onde ele vai entrar, e a ordem nova vai na hora
+  para o buffer de edição (marca "não salvo").
 - Editor do bloco selecionado: troca de algoritmo e painel híbrido de parâmetros (nomes, faixas e opções vindos de
   `assets/params.json`):
   - controles numa placa centralizada (na horizontal e na vertical) ao lado da foto; os knobs crescem quando são
