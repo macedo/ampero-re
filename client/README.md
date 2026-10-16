@@ -77,6 +77,15 @@ Ferramentas:
   Claude para correção) e só então troca algoritmos, liga/desliga blocos e ajusta parâmetros no buffer de edição.
   **Nada é salvo** sem você clicar em Salvar.
 
+Prompt padrão: o servidor manda **instruções** no handshake, que o Claude coloca no contexto enquanto o `ampero`
+estiver conectado (especialista em timbres, em português; lembrar o equipamento original, consultar o catálogo antes
+de escolher, aplicar só o que muda, resumir bloco/algoritmo/valores e dar dicas de execução). E há **prompts
+prontos**, no menu **+** do Claude Desktop:
+
+- **Montar timbre no Ampero:** música, banda ou estilo; trecho e guitarra são opcionais;
+- **Ajustar o timbre atual:** o que mudar (ex.: "mais encorpado nas bases");
+- **Explicar o preset atual:** bloco a bloco, com até três sugestões, sem aplicar nada.
+
 Quem fala com a pedaleira é a GUI, porque no Windows a porta MIDI é exclusiva: `ampero mcp` é só uma ponte stdio
 que responde o handshake sozinha e repassa as chamadas. Com a GUI fechada, as ferramentas avisam o Claude para
 pedir que você abra o app.

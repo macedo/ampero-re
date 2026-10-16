@@ -21,10 +21,34 @@ const PATH: &str = "/mcp";
 const SUPPORTED_VERSIONS: [&str; 3] = ["2025-06-18", "2025-03-26", "2024-11-05"];
 const MAX_BODY: usize = 1 << 20;
 
-const INSTRUCTIONS: &str = "Ferramentas do Ampero (pedaleira Hotone Ampero). Para montar um timbre: consulte \
-os blocos com listar_algoritmos e detalhar_algoritmo, use preset_atual quando o pedido for ajustar o timbre \
-atual, e aplique com aplicar_timbre usando só algoritmos e parâmetros que existem. aplicar_timbre muda só o \
-buffer de edição; o usuário salva pela pedaleira ou pelo app se gostar.";
+/// Instruções do servidor: o cliente MCP (Claude Desktop/Claude Code) as coloca no contexto enquanto o
+/// servidor estiver conectado, então valem como o "prompt padrão" do assistente de timbre.
+const INSTRUCTIONS: &str = "\
+Este servidor controla a pedaleira Hotone Ampero do usuário. Quando o assunto for timbre de guitarra ou baixo, \
+atue como especialista em timbres e responda em português do Brasil, de forma direta e prática.
+
+A cadeia do Ampero tem blocos fixos, cada um com um algoritmo: FX1, FX2, AMP, NR, CAB, EQ, FX3, DLY, RVB. \
+Os nomes dos algoritmos são inspirados em equipamentos reais (ex.: \"Marshell 800\" = Marshall JCM800, \
+\"UK Modern 4x12\" = caixa Marshall 1960); use as descrições do catálogo para fazer essa ponte.
+
+Como montar um timbre:
+1. Entenda o pedido: música ou banda, trecho (base, solo, limpo) e, se fizer diferença, a guitarra e os \
+captadores. Pergunte só o essencial; se a música for conhecida e o trecho não for dito, escolha o mais \
+marcante e diga qual escolheu.
+2. Lembre o equipamento original (guitarra, pedais, amplificador, caixa) e o que define o som.
+3. Consulte o catálogo: listar_algoritmos nos blocos que importam e detalhar_algoritmo antes de definir \
+valores. Use somente algoritmos e parâmetros que existem; se não houver equivalente exato, escolha o mais \
+próximo e diga isso.
+4. Para ajustar algo que o usuário já tem, leia antes o preset_atual e mude só o necessário.
+5. Aplique com aplicar_timbre, só com os blocos que mudam (valores na unidade exibida, ex.: 450 para 450 ms). \
+Desligue (on: false) blocos que atrapalhariam o timbre, combine o CAB com o AMP, use o NR em ganho alto e \
+mantenha o volume de saída parecido com o de antes. Se a ferramenta apontar erros, corrija e aplique de novo.
+6. Responda com um resumo curto: bloco, algoritmo e os valores principais; o porquê das escolhas em poucas \
+frases; e dicas de execução (captador, volume da guitarra, palhetada).
+
+aplicar_timbre muda só o buffer de edição: nada é salvo. Lembre o usuário de ouvir e salvar pela pedaleira ou \
+pelo app se gostar. Se uma ferramenta disser que a GUI está fechada ou a pedaleira desconectada, peça para \
+abrir o app do Ampero e conectar.";
 
 // ---------------------------------------------------------------- ferramentas
 
@@ -41,6 +65,126 @@ pub fn tool_list() -> Value {
         .map(|t| json!({"name": t.name, "description": t.description, "inputSchema": t.schema}))
         .collect();
     json!({ "tools": tools })
+}
+
+// ---------------------------------------------------------------- prompts prontos
+
+struct PromptArg {
+    name: &'static str,
+    description: &'static str,
+    required: bool,
+}
+
+struct PromptSpec {
+    name: &'static str,
+    title: &'static str,
+    description: &'static str,
+    args: &'static [PromptArg],
+}
+
+const PROMPTS: [PromptSpec; 3] = [
+    PromptSpec {
+        name: "montar_timbre",
+        title: "Montar timbre no Ampero",
+        description: "Monta e aplica no Ampero o timbre de uma música, banda ou estilo.",
+        args: &[
+            PromptArg {
+                name: "musica",
+                description: "Música, banda ou estilo (ex.: Comfortably Numb - Pink Floyd)",
+                required: true,
+            },
+            PromptArg {
+                name: "trecho",
+                description: "Trecho: base, solo, limpo… (opcional)",
+                required: false,
+            },
+            PromptArg {
+                name: "guitarra",
+                description: "Sua guitarra e captadores (ex.: Strat single-coil; opcional)",
+                required: false,
+            },
+        ],
+    },
+    PromptSpec {
+        name: "ajustar_timbre",
+        title: "Ajustar o timbre atual",
+        description: "Ajusta o preset carregado no Ampero conforme o que você quer mudar.",
+        args: &[PromptArg {
+            name: "pedido",
+            description: "O que mudar (ex.: mais encorpado nas bases, menos agudo no solo)",
+            required: true,
+        }],
+    },
+    PromptSpec {
+        name: "explicar_preset",
+        title: "Explicar o preset atual",
+        description: "Explica o que cada bloco do preset atual faz e sugere melhorias, sem aplicar nada.",
+        args: &[],
+    },
+];
+
+fn prompt_list() -> Value {
+    let prompts: Vec<Value> = PROMPTS
+        .iter()
+        .map(|p| {
+            let args: Vec<Value> = p
+                .args
+                .iter()
+                .map(|a| json!({"name": a.name, "description": a.description, "required": a.required}))
+                .collect();
+            json!({"name": p.name, "title": p.title, "description": p.description, "arguments": args})
+        })
+        .collect();
+    json!({ "prompts": prompts })
+}
+
+/// Monta a mensagem de um prompt pronto. `Err` com a mensagem para o cliente (prompt ou argumento faltando).
+fn prompt_get(params: &Value) -> Result<Value, String> {
+    let name = params.get("name").and_then(Value::as_str).unwrap_or("");
+    let spec = PROMPTS
+        .iter()
+        .find(|p| p.name == name)
+        .ok_or_else(|| format!("prompt desconhecido: {name}"))?;
+    let arg = |key: &str| {
+        params
+            .pointer(&format!("/arguments/{key}"))
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+    };
+    for a in spec.args.iter().filter(|a| a.required) {
+        if arg(a.name).is_none() {
+            return Err(format!("falta o argumento \"{}\"", a.name));
+        }
+    }
+    let text = match name {
+        "montar_timbre" => {
+            let mut t = format!("Monte no Ampero o timbre de: {}.", arg("musica").unwrap_or_default());
+            match arg("trecho") {
+                Some(trecho) => t += &format!("\nTrecho: {trecho}."),
+                None => t += "\nSe eu não disse o trecho, escolha o mais marcante e diga qual escolheu.",
+            }
+            if let Some(g) = arg("guitarra") {
+                t += &format!("\nMinha guitarra: {g}. Leve os captadores em conta.");
+            }
+            t + "\n\nLembre o equipamento original, consulte o catálogo do Ampero antes de escolher, aplique com \
+                 aplicar_timbre e me dê um resumo curto (bloco, algoritmo e valores principais), o porquê das \
+                 escolhas e dicas de execução."
+        }
+        "ajustar_timbre" => format!(
+            "Leia o preset atual do Ampero e ajuste: {}.\n\nMude só o necessário, aplique com aplicar_timbre e \
+             diga o que mudou e por quê, em poucas frases.",
+            arg("pedido").unwrap_or_default()
+        ),
+        _ => "Leia o preset atual do Ampero e explique, bloco a bloco, o que cada um faz no timbre (com o \
+              equipamento real em que o algoritmo se inspira). Depois sugira até três melhorias, sem aplicar \
+              nada até eu pedir."
+            .to_string(),
+    };
+    Ok(json!({
+        "description": spec.description,
+        "messages": [{"role": "user", "content": {"type": "text", "text": text}}],
+    }))
 }
 
 // ---------------------------------------------------------------- JSON-RPC
@@ -64,7 +208,7 @@ fn initialize_result(params: &Value) -> Value {
         .unwrap_or(&SUPPORTED_VERSIONS[0]);
     json!({
         "protocolVersion": version,
-        "capabilities": {"tools": {"listChanged": false}},
+        "capabilities": {"tools": {"listChanged": false}, "prompts": {"listChanged": false}},
         "serverInfo": {"name": "ampero", "version": env!("CARGO_PKG_VERSION")},
         "instructions": INSTRUCTIONS,
     })
@@ -78,6 +222,11 @@ pub fn handle_message(msg: &Value, host: &mut dyn ToolHost) -> Option<Value> {
         "initialize" => result(&id, initialize_result(&params)),
         "ping" => result(&id, json!({})),
         "tools/list" => result(&id, tool_list()),
+        "prompts/list" => result(&id, prompt_list()),
+        "prompts/get" => match prompt_get(&params) {
+            Ok(p) => result(&id, p),
+            Err(e) => error(&id, -32602, &e),
+        },
         "tools/call" => {
             let name = params.get("name").and_then(Value::as_str).unwrap_or("");
             let args = params
@@ -521,6 +670,72 @@ mod tests {
         )
         .unwrap();
         assert_eq!(bad["error"]["code"], -32601);
+    }
+
+    #[test]
+    fn ready_made_prompts() {
+        let mut host = Echo(vec![]);
+        let init = handle_message(
+            &json!({"jsonrpc": "2.0", "id": 1, "method": "initialize"}),
+            &mut host,
+        )
+        .unwrap();
+        assert!(init["result"]["capabilities"]["prompts"].is_object());
+        assert!(
+            init["result"]["instructions"]
+                .as_str()
+                .unwrap()
+                .contains("aplicar_timbre")
+        );
+
+        let list = handle_message(
+            &json!({"jsonrpc": "2.0", "id": 2, "method": "prompts/list"}),
+            &mut host,
+        )
+        .unwrap();
+        let prompts = list["result"]["prompts"].as_array().unwrap();
+        let names: Vec<&str> = prompts
+            .iter()
+            .map(|p| p["name"].as_str().unwrap())
+            .collect();
+        assert_eq!(
+            names,
+            ["montar_timbre", "ajustar_timbre", "explicar_preset"]
+        );
+        assert_eq!(prompts[0]["arguments"][0]["name"], "musica");
+        assert_eq!(prompts[0]["arguments"][0]["required"], true);
+
+        let get = |args: Value| {
+            handle_message(
+                &json!({"jsonrpc": "2.0", "id": 3, "method": "prompts/get", "params": args}),
+                &mut Echo(vec![]),
+            )
+            .unwrap()
+        };
+        let r = get(
+            json!({"name": "montar_timbre", "arguments": {"musica": "Back in Black", "guitarra": "SG humbucker"}}),
+        );
+        let text = r["result"]["messages"][0]["content"]["text"]
+            .as_str()
+            .unwrap();
+        assert_eq!(r["result"]["messages"][0]["role"], "user");
+        assert!(
+            text.contains("Back in Black")
+                && text.contains("SG humbucker")
+                && text.contains("mais marcante")
+        );
+
+        let r = get(json!({"name": "montar_timbre", "arguments": {"musica": "  "}}));
+        assert_eq!(r["error"]["code"], -32602);
+        assert!(r["error"]["message"].as_str().unwrap().contains("musica"));
+        let r = get(json!({"name": "explicar_preset"}));
+        assert!(
+            r["result"]["messages"][0]["content"]["text"]
+                .as_str()
+                .unwrap()
+                .contains("sem aplicar")
+        );
+        assert_eq!(get(json!({"name": "outro"}))["error"]["code"], -32602);
     }
 
     fn req(method: &str, path: &str, headers: &[(&str, &str)]) -> HttpRequest {
