@@ -6,7 +6,7 @@ use eframe::egui;
 use serde_json::Value;
 use std::net::TcpListener;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::mpsc::{Receiver, Sender, channel};
 use std::thread;
 use std::time::Duration;
@@ -22,6 +22,8 @@ pub struct McpServer {
     pub port: u16,
     stop: Arc<AtomicBool>,
     calls: Receiver<UiCall>,
+    /// Requisições atendidas até agora (o indicador pisca quando o número muda).
+    requests: Arc<AtomicUsize>,
 }
 
 struct UiHost {
@@ -60,11 +62,16 @@ impl McpServer {
             ctx: ctx.clone(),
         };
         let flag = stop.clone();
+        let requests = Arc::new(AtomicUsize::new(0));
+        let counter = requests.clone();
+        let repaint = ctx.clone();
         thread::spawn(move || {
             while !flag.load(Ordering::Relaxed) {
                 match listener.accept() {
                     Ok((stream, _)) => {
                         let _ = stream.set_nonblocking(false);
+                        counter.fetch_add(1, Ordering::Relaxed);
+                        repaint.request_repaint();
                         mcp::serve_connection(stream, port, &token, &mut host);
                     }
                     Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
@@ -74,12 +81,21 @@ impl McpServer {
                 }
             }
         });
-        Ok(McpServer { port, stop, calls })
+        Ok(McpServer {
+            port,
+            stop,
+            calls,
+            requests,
+        })
     }
 
     /// Chamadas que chegaram desde o último frame.
     pub fn take_calls(&self) -> Vec<UiCall> {
         self.calls.try_iter().collect()
+    }
+
+    pub fn request_count(&self) -> usize {
+        self.requests.load(Ordering::Relaxed)
     }
 }
 

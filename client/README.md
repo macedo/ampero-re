@@ -61,8 +61,8 @@ por [MCP](https://modelcontextprotocol.io), com a assinatura Pro/Max do usuário
 
 1. Na GUI, menu ⚙ → **Conectar ao Claude…** → **Ligar**. A GUI aberta passa a atender em `127.0.0.1:47800`
    (porta em `gui.json`); só programas desta máquina com o token de `mcp-token` (na pasta de configuração) entram,
-   e requisições de páginas web são recusadas. Ligado, aparece **● MCP** na barra superior (verde = atendendo,
-   vermelho = erro); clicar nele abre a mesma janela.
+   e requisições de páginas web são recusadas. A barra superior sempre mostra uma bolinha **MCP**: verde ligado,
+   vermelho desligado, laranja com erro, piscando enquanto o Claude usa o servidor; clicar nela abre a mesma janela.
 2. Na mesma janela, **Configurar o Claude Desktop**: acrescenta `ampero` em `mcpServers` no
    `claude_desktop_config.json` (com backup), apontando para `ampero mcp`. Feche o Claude Desktop pela bandeja e
    abra de novo. No Claude Code: `claude mcp add ampero -- "<pasta do app>/ampero" mcp`.

@@ -30,7 +30,13 @@ pub struct AppMenu {
     show_mcp: bool,
     /// Resultado do botão "Configurar o Claude Desktop".
     mcp_install_status: Option<String>,
+    /// Requisições vistas e quando chegou a última (o indicador pisca logo depois).
+    mcp_seen_requests: usize,
+    mcp_activity: Option<std::time::Instant>,
 }
+
+/// Por quanto tempo o indicador pisca depois de uma requisição.
+const MCP_BLINK: std::time::Duration = std::time::Duration::from_millis(1500);
 
 impl AppMenu {
     pub fn new(ctx: &egui::Context) -> AppMenu {
@@ -51,6 +57,8 @@ impl AppMenu {
             mcp_error: None,
             show_mcp: false,
             mcp_install_status: None,
+            mcp_seen_requests: 0,
+            mcp_activity: None,
         }
     }
 
@@ -68,10 +76,16 @@ impl AppMenu {
             (Some(_), false) => self.mcp = None,
             _ => {}
         }
-        self.mcp
-            .as_ref()
-            .map(|s| s.take_calls())
-            .unwrap_or_default()
+        let Some(server) = &self.mcp else {
+            self.mcp_seen_requests = 0;
+            return Vec::new();
+        };
+        let count = server.request_count();
+        if count != self.mcp_seen_requests {
+            self.mcp_seen_requests = count;
+            self.mcp_activity = Some(std::time::Instant::now());
+        }
+        server.take_calls()
     }
 
     fn open_mcp_window(&mut self) {
@@ -79,27 +93,44 @@ impl AppMenu {
         self.mcp_install_status = None;
     }
 
-    /// Indicador na barra superior (só com o servidor MCP ligado): verde quando atende, vermelho com
-    /// erro. Clicar abre a janela "Conectar ao Claude".
+    /// Indicador do servidor MCP na barra superior, sempre visível: verde ligado, vermelho desligado,
+    /// laranja com erro. Pisca enquanto chegam requisições. Clicar abre a janela "Conectar ao Claude".
     pub fn mcp_indicator(&mut self, ui: &mut egui::Ui, act: bool) {
-        if !self.settings.mcp_enabled {
-            return;
-        }
-        let (color, hover) = match (&self.mcp, &self.mcp_error) {
+        let (mut color, hover) = match (&self.mcp, &self.mcp_error) {
             (Some(s), _) => (
                 egui::Color32::from_rgb(80, 200, 120),
                 format!(
                     "Servidor MCP ligado em 127.0.0.1:{}: o Claude Desktop/Claude Code pode montar timbres.\n\
-                     Clique para ver ou mudar a conexão.",
+                     Pisca quando está sendo usado. Clique para ver ou mudar a conexão.",
                     s.port
                 ),
             ),
             (None, Some(e)) => (
-                egui::Color32::from_rgb(220, 80, 80),
+                egui::Color32::from_rgb(240, 160, 60),
                 format!("Servidor MCP com erro: {e}\nClique para ver."),
             ),
-            (None, None) => (egui::Color32::GRAY, "Servidor MCP iniciando…".to_string()),
+            (None, None) if self.settings.mcp_enabled => {
+                (egui::Color32::GRAY, "Servidor MCP iniciando…".to_string())
+            }
+            (None, None) => (
+                egui::Color32::from_rgb(220, 80, 80),
+                "Servidor MCP desligado: o Claude não consegue montar timbres no app.\nClique para ligar."
+                    .to_string(),
+            ),
         };
+        if self.mcp.is_some()
+            && let Some(at) = self.mcp_activity
+        {
+            let age = at.elapsed();
+            if age < MCP_BLINK {
+                // alterna aceso/apagado a cada 120 ms
+                if (age.as_millis() / 120) % 2 == 1 {
+                    color = color.gamma_multiply(0.25);
+                }
+                ui.ctx()
+                    .request_repaint_after(std::time::Duration::from_millis(40));
+            }
+        }
         // layout da direita para a esquerda: o texto entra primeiro e a bolinha fica à esquerda dele
         let label = egui::Label::new(RichText::new("MCP").strong().color(color))
             .sense(egui::Sense::click());
