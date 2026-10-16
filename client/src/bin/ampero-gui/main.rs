@@ -1054,7 +1054,7 @@ impl App {
                 // teste: knob compacto no lugar do slider (o slider deslocava sob o mouse e pulava)
                 let act = self.first_pass;
                 let knob = widgets::mini_knob(ui, &mut volume, 0..=max, 22.0, act).on_hover_text(
-                    "Volume do patch (0–99): arraste para cima/direita, Shift = fino, roda = 1 em 1",
+                    "Volume do patch (0–99): arraste para cima/direita ou role a roda; com Shift, ajuste fino",
                 );
                 if (typed.is_some() || knob.changed()) && volume != cur.volume {
                     cur.volume = volume;

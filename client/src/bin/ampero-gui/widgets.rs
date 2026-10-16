@@ -162,7 +162,40 @@ fn inline_value(
     changed
 }
 
-/// Knob giratório: arrastar na vertical ajusta (Shift = fino), scroll ajusta de 1 em 1,
+/// Roda do mouse sobre um controle: devolve (passos, fino). Sem Shift, um passo por frame com rolagem
+/// (como sempre foi); com Shift, ajuste fino de **um passo por dente da roda**. O egui transforma a roda
+/// com Shift em rolagem horizontal, então os dois eixos contam; o resto de um dente fica guardado em `id`.
+fn wheel_steps(ui: &egui::Ui, id: egui::Id) -> (f32, bool) {
+    let (delta, shift) = ui.input(|i| {
+        (
+            i.smooth_scroll_delta.y + i.smooth_scroll_delta.x,
+            i.modifiers.shift,
+        )
+    });
+    // pontos por dente da roda (40 no desktop)
+    let per_notch = ui
+        .ctx()
+        .options(|o| o.input_options.line_scroll_speed)
+        .max(1.0);
+    let key = id.with("wheel-fine");
+    if !shift {
+        ui.data_mut(|d| d.remove::<f32>(key));
+        return (
+            if delta.abs() > 0.5 {
+                delta.signum()
+            } else {
+                0.0
+            },
+            false,
+        );
+    }
+    let acc = ui.data(|d| d.get_temp::<f32>(key)).unwrap_or(0.0) + delta;
+    let steps = (acc / per_notch).trunc();
+    ui.data_mut(|d| d.insert_temp(key, acc - steps * per_notch));
+    (steps, true)
+}
+
+/// Knob giratório: arrastar na vertical ajusta (Shift = fino), scroll ajusta (Shift + scroll = 1 por dente),
 /// duplo clique volta ao padrão do efeito, clique no número para digitar.
 /// `act` = false na passada descartada do egui (multi-pass).
 pub fn knob(
@@ -200,12 +233,10 @@ pub fn knob(
             ui.data_mut(|d| d.insert_temp(id, acc));
             *value = acc.round() as u16;
         } else if resp.hovered() {
-            let scroll = ui.input(|i| i.smooth_scroll_delta.y);
-            if scroll.abs() > 0.5 {
-                let step = (span / 100.0).max(1.0);
-                *value = (*value as f32 + scroll.signum() * step)
-                    .clamp(lo, hi)
-                    .round() as u16;
+            let (steps, fine) = wheel_steps(ui, id);
+            if steps != 0.0 {
+                let step = if fine { 1.0 } else { (span / 100.0).max(1.0) };
+                *value = (*value as f32 + steps * step).clamp(lo, hi).round() as u16;
             }
         }
         if *value != before {
@@ -281,7 +312,7 @@ pub fn knob(
         );
     }
     resp.on_hover_text(format!(
-        "{}: {}\npadrão {} · arraste (Shift = fino), scroll ou duplo clique para o padrão\nclique no número para digitar o valor",
+        "{}: {}\npadrão {} · arraste ou role a roda (Shift = fino), duplo clique para o padrão\nclique no número para digitar o valor",
         pm.name,
         format_value(pm, *value),
         format_value(pm, pm.default as u16)
@@ -373,19 +404,20 @@ pub fn fader_bank(
                 ui.data_mut(|d| d.insert_temp(id, acc));
                 *value = acc.round() as u16;
             } else if resp.hovered() {
-                let (scroll, up, down) = ui.input(|i| {
+                let (up, down) = ui.input(|i| {
                     (
-                        i.smooth_scroll_delta.y,
                         i.key_pressed(egui::Key::ArrowUp),
                         i.key_pressed(egui::Key::ArrowDown),
                     )
                 });
-                let step = if up || scroll > 0.5 {
+                // roda: 1 por frame; Shift + roda: 1 por dente
+                let (wheel, _) = wheel_steps(ui, id);
+                let step = if up {
                     1.0
-                } else if down || scroll < -0.5 {
+                } else if down {
                     -1.0
                 } else {
-                    0.0
+                    wheel
                 };
                 *value = (*value as f32 + step).clamp(lo, hi) as u16;
             }
@@ -441,7 +473,7 @@ pub fn fader_bank(
             weak,
         );
         resp.on_hover_text(format!(
-            "{}: {}\narraste (Shift = fino), scroll ou ↑/↓ de 1 em 1, duplo clique = padrão ({})",
+            "{}: {}\narraste ou role a roda (Shift = fino), ↑/↓ de 1 em 1, duplo clique = padrão ({})",
             pm.name,
             format_value(pm, *value),
             format_value(pm, pm.default as u16)
@@ -539,9 +571,10 @@ pub fn mini_knob(
         ui.data_mut(|data| data.insert_temp(id, acc));
         *value = acc.round() as u16;
     } else if resp.hovered() {
-        let scroll = ui.input(|i| i.smooth_scroll_delta.y);
-        if scroll.abs() > 0.5 {
-            *value = (*value as f32 + scroll.signum()).clamp(lo, hi) as u16;
+        // roda: 1 por frame; Shift + roda: 1 por dente
+        let (steps, _) = wheel_steps(ui, id);
+        if steps != 0.0 {
+            *value = (*value as f32 + steps).clamp(lo, hi) as u16;
         }
     }
     if *value != before {
