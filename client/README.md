@@ -50,7 +50,8 @@ egui/eframe, um binário nativo por SO. Ao abrir, conecta e sincroniza sozinha (
   `AMPERO_RESOURCES` com o caminho da pasta `Resource/Ampero`. Sem ela, a GUI funciona normalmente, só sem fotos.
 - Edições vão ao vivo para o buffer de edição. "não salvo" aparece quando o buffer difere do preset gravado.
   Liga/desliga feito pela pedaleira (CTRL, footswitch) é uso ao vivo e não conta como edição.
-- No cabeçalho, **Volume** do patch num slider (0–99) e **Tempo** clicável como o nome (40–250 BPM; Enter confirma,
+- No cabeçalho, **Volume** do patch num knob compacto (0–99; arraste para cima/direita, Shift = fino, roda = 1 em 1)
+  com o número clicável para digitar, e **Tempo** clicável como o nome (40–250 BPM; Enter confirma,
   Esc cancela); os dois vão na hora para o buffer de edição. Tap tempo feito na pedaleira não conta como "não salvo".
 - Salvar (só no banco de usuário) pede confirmação. Clicar no nome do preset no cabeçalho abre um campo para renomear
   (até 16 caracteres ASCII; Enter confirma, Esc cancela); o nome novo marca "não salvo" e é gravado no Salvar.

@@ -994,16 +994,15 @@ impl App {
     fn tempo_editor(&mut self, ui: &mut egui::Ui, cur: &mut Preset) {
         use ampero::protocol::{TEMPO_MAX, TEMPO_MIN};
         let hover = format!("Clique para mudar o tempo ({TEMPO_MIN}–{TEMPO_MAX} BPM)");
-        let range = TEMPO_MIN..=TEMPO_MAX;
-        if let Some(bpm) = widgets::number_edit(
-            ui,
-            &mut self.tempo_edit,
-            cur.index,
-            cur.tempo,
-            range,
-            " BPM",
-            &hover,
-        ) {
+        let field = widgets::NumberField {
+            range: TEMPO_MIN..=TEMPO_MAX,
+            suffix: " BPM",
+            hover: &hover,
+            width: 64.0,
+        };
+        if let Some(bpm) =
+            widgets::number_edit(ui, &mut self.tempo_edit, cur.index, cur.tempo, &field)
+        {
             cur.tempo = bpm;
             self.tempo_edited = true;
             self.send(Cmd::SetTempo(bpm));
@@ -1038,33 +1037,26 @@ impl App {
                 // digitar (um DragValue também mudava o valor ao arrastar sobre ele).
                 let max = ampero::protocol::VOLUME_MAX;
                 let mut volume = cur.volume.min(max);
-                let typed = widgets::number_edit(
-                    ui,
-                    &mut self.volume_edit,
-                    cur.index,
-                    volume,
-                    0..=max,
-                    "",
-                    "Clique para digitar o volume (0–99)",
-                );
+                let field = widgets::NumberField {
+                    range: 0..=max,
+                    suffix: "",
+                    hover: "Clique para digitar o volume (0–99)",
+                    width: 24.0,
+                };
+                let typed =
+                    widgets::number_edit(ui, &mut self.volume_edit, cur.index, volume, &field);
                 if let Some(v) = typed {
                     volume = v;
                 }
-                // distância maior que a margem de toque do egui (interact_radius, 5 px): sem ela, o slider
-                // (desenhado por cima) capturava o clique no número e pulava para lá
-                ui.add_space(ui.style().interaction.interact_radius * 2.0 + 4.0);
-                let slider = ui
-                    .scope(|ui| {
-                        ui.spacing_mut().slider_width = 130.0;
-                        ui.add(
-                            egui::Slider::new(&mut volume, 0..=max)
-                                .show_value(false)
-                                .trailing_fill(true),
-                        )
-                    })
-                    .inner
-                    .on_hover_text("Volume do patch (0–99), igual ao editor oficial");
-                if (typed.is_some() || slider.changed()) && volume != cur.volume {
+                // distância maior que a margem de toque do egui (interact_radius, 5 px): sem ela, o controle
+                // ao lado (desenhado por cima) capturava o clique no número
+                ui.add_space(ui.style().interaction.interact_radius * 2.0);
+                // teste: knob compacto no lugar do slider (o slider deslocava sob o mouse e pulava)
+                let act = self.first_pass;
+                let knob = widgets::mini_knob(ui, &mut volume, 0..=max, 22.0, act).on_hover_text(
+                    "Volume do patch (0–99): arraste para cima/direita, Shift = fino, roda = 1 em 1",
+                );
+                if (typed.is_some() || knob.changed()) && volume != cur.volume {
                     cur.volume = volume;
                     self.send(Cmd::SetVolume(volume));
                 }
