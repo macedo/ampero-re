@@ -74,7 +74,8 @@ Ferramentas:
 - `listar_algoritmos` e `detalhar_algoritmo` consultam o catálogo em vez de mandar os 435 algoritmos de uma vez; as
   descrições da instalação oficial ajudam a ligar os nomes aos equipamentos reais ("Marshell 800" = Marshall JCM800);
 - `preset_atual` lê o buffer de edição da pedaleira;
-- `aplicar_timbre` valida tudo antes (algoritmo existe, parâmetro existe, valor dentro da faixa; os erros voltam ao
+- `aplicar_timbre` exige o preset confirmado pelo usuário (`preset`, que precisa ser o carregado; o Claude pergunta
+  antes, e a ferramenta recusa se não bater), valida tudo (algoritmo existe, parâmetro existe, valor dentro da faixa; os erros voltam ao
   Claude para correção) e só então troca algoritmos, liga/desliga blocos e ajusta parâmetros no buffer de edição.
   **Nada é salvo** sem você clicar em Salvar.
 

@@ -45,6 +45,12 @@ Também há **prompts prontos**, no botão **+** da caixa de mensagem do Claude 
 | Ajustar o timbre atual | mudar o preset que está carregado | o que mudar |
 | Explicar o preset atual | entender o preset, com até três sugestões | nenhum; não aplica nada |
 
+**Antes de aplicar, o Claude sempre pergunta em qual preset.** Ele diz qual está carregado (ex.: "P29-1 'Meu
+Lead'") e espera você confirmar; se o preset tiver alterações não salvas, ele avisa que serão substituídas. Para
+usar outro, selecione-o na pedaleira ou no app e diga ao Claude. Isso não depende só dele obedecer: a ferramenta
+`aplicar_timbre` exige o preset confirmado e recusa se ele não for o carregado naquele momento. Se você trocar de
+preset no meio da conversa, ele precisa confirmar de novo.
+
 Enquanto o Claude usa o Ampero, a bolinha **MCP** pisca. Quando ele aplica um timbre, a barra do app mostra
 "Claude aplicou … no buffer" e a tela já exibe os blocos e valores novos.
 

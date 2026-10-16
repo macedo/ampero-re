@@ -139,9 +139,17 @@ impl App {
     /// Executa uma ferramenta pedida por um cliente MCP (Claude Desktop/Claude Code). Devolve (texto, é erro).
     fn run_mcp_tool(&mut self, name: &str, args: &serde_json::Value) -> (String, bool) {
         use ampero::timbre::{ToolContext, ToolOutcome, run_tool};
+        // mesma regra do "não salvo" do cabeçalho
+        let unsaved = self.current.as_ref().is_some_and(|cur| {
+            self.presets
+                .iter()
+                .find(|p| p.index == cur.index)
+                .is_some_and(|s| !same_sound(s, cur, &self.pedal_switched))
+        });
         let ctx = ToolContext {
             preset: self.current.as_ref(),
             resources: self.resources.as_ref(),
+            unsaved,
         };
         match run_tool(name, args, &ctx) {
             ToolOutcome::Text(t) => (t, false),

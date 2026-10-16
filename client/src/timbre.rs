@@ -205,13 +205,16 @@ pub fn tool_specs() -> Vec<ToolSpec> {
         },
         ToolSpec {
             name: "aplicar_timbre",
-            description: "Aplica um timbre no buffer de edição da pedaleira (não salva). Inclua só os blocos que \
-                          devem mudar; blocos omitidos ficam como estão. Valores na unidade exibida (ex.: 450 para \
+            description: "Aplica um timbre no buffer de edição da pedaleira (não salva). Antes, pergunte ao usuário \
+                          em qual preset aplicar (diga o rótulo e o nome do carregado, de preset_atual) e só chame \
+                          depois da confirmação, passando esse rótulo em `preset`. Inclua só os blocos que devem \
+                          mudar; blocos omitidos ficam como estão. Valores na unidade exibida (ex.: 450 para \
                           450 ms), opções de combo pelo nome e chaves como true/false. Se houver erros, nada é \
                           aplicado e a ferramenta lista o que corrigir.",
             schema: json!({
                 "type": "object",
                 "properties": {
+                    "preset": {"type": "string", "description": "Rótulo do preset em que o usuário confirmou aplicar (ex.: \"P29-1\"); precisa ser o carregado agora"},
                     "title": {"type": "string", "description": "Nome curto do timbre (ex.: \"Comfortably Numb - solo\")"},
                     "explanation": {"type": "string", "description": "Resumo das escolhas em 1-3 frases"},
                     "blocks": {
@@ -228,7 +231,7 @@ pub fn tool_specs() -> Vec<ToolSpec> {
                         }
                     }
                 },
-                "required": ["title", "explanation", "blocks"]
+                "required": ["preset", "title", "explanation", "blocks"]
             }),
         },
     ]
@@ -238,6 +241,52 @@ pub fn tool_specs() -> Vec<ToolSpec> {
 pub struct ToolContext<'a> {
     pub preset: Option<&'a Preset>,
     pub resources: Option<&'a Resources>,
+    /// O preset carregado tem alterações não salvas (aplicar um timbre por cima as substitui).
+    pub unsaved: bool,
+}
+
+/// "P01-1 \"Marshall Drive\" (banco de usuário)", para o Claude repetir ao usuário.
+fn describe_preset(p: &Preset) -> String {
+    let bank = if p.bank == 0 {
+        "banco de fábrica"
+    } else {
+        "banco de usuário"
+    };
+    format!("{} \"{}\" ({bank})", p.label, p.name)
+}
+
+/// Confere se o preset que o usuário confirmou é o carregado agora. `Err` explica o que fazer.
+fn check_target(input: &Value, ctx: &ToolContext) -> Result<(), String> {
+    let current = ctx
+        .preset
+        .ok_or("A pedaleira não está conectada no app; nada foi aplicado.")?;
+    let asked = input
+        .get("preset")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .unwrap_or("");
+    let unsaved = if ctx.unsaved {
+        " Atenção: ele tem alterações não salvas, que serão substituídas; avise o usuário."
+    } else {
+        ""
+    };
+    if asked.is_empty() {
+        return Err(format!(
+            "Nada foi aplicado. Pergunte ao usuário em qual preset aplicar: o carregado agora é {}.{unsaved} \
+             Depois da confirmação, chame de novo com preset: \"{}\".",
+            describe_preset(current),
+            current.label
+        ));
+    }
+    if !asked.eq_ignore_ascii_case(&current.label) {
+        return Err(format!(
+            "Nada foi aplicado: o preset carregado é {}, não {asked}. Peça ao usuário para selecionar {asked} \
+             na pedaleira ou no app (você não troca de preset), ou para confirmar que quer aplicar em {}.",
+            describe_preset(current),
+            current.label
+        ));
+    }
+    Ok(())
 }
 
 pub enum ToolOutcome {
@@ -365,9 +414,13 @@ pub fn run_tool(name: &str, input: &Value, ctx: &ToolContext) -> ToolOutcome {
             ),
             Some(p) => {
                 let mut s = format!(
-                    "{} \"{}\" — volume {}, tempo {} BPM\nOrdem da cadeia: {}\n",
-                    p.label,
-                    p.name,
+                    "{}{} — volume {}, tempo {} BPM\nOrdem da cadeia: {}\n",
+                    describe_preset(p),
+                    if ctx.unsaved {
+                        " — COM ALTERAÇÕES NÃO SALVAS"
+                    } else {
+                        ""
+                    },
                     p.volume,
                     p.tempo,
                     p.chain.join(" > ")
@@ -399,9 +452,11 @@ pub fn run_tool(name: &str, input: &Value, ctx: &ToolContext) -> ToolOutcome {
         },
         "aplicar_timbre" => match serde_json::from_value::<Proposal>(input.clone()) {
             Err(e) => ToolOutcome::Error(format!("formato inválido: {e}")),
-            Ok(p) => match resolve(&p) {
-                Ok(blocks) => ToolOutcome::Apply(p, blocks),
-                Err(errs) => ToolOutcome::Error(format!(
+            // o preset confirmado vem antes de validar o timbre: sem confirmação, nada segue
+            Ok(p) => match check_target(input, ctx).map(|()| resolve(&p)) {
+                Err(e) => ToolOutcome::Error(e),
+                Ok(Ok(blocks)) => ToolOutcome::Apply(p, blocks),
+                Ok(Err(errs)) => ToolOutcome::Error(format!(
                     "Nada foi aplicado. Corrija:\n- {}",
                     errs.join("\n- ")
                 )),
@@ -419,7 +474,72 @@ mod tests {
         ToolContext {
             preset: None,
             resources: None,
+            unsaved: false,
         }
+    }
+
+    /// Preset "P29-1 Teste" do banco de usuário, para as ferramentas terem um carregado.
+    fn p29() -> Preset {
+        let mut raw = vec![0u8; 459];
+        raw[0] = 1; // banco de usuário
+        raw[1] = 84; // slot de P29-1
+        raw[4..9].copy_from_slice(b"Teste");
+        Preset::decode(84 + 128, &raw).unwrap()
+    }
+
+    fn with_preset(p: &Preset, unsaved: bool) -> ToolContext<'_> {
+        ToolContext {
+            preset: Some(p),
+            resources: None,
+            unsaved,
+        }
+    }
+
+    #[test]
+    fn aplicar_timbre_only_on_the_confirmed_preset() {
+        let p = p29();
+        let mut args = proposal_json();
+        // sem preset confirmado: pede para perguntar, dizendo qual está carregado
+        let ToolOutcome::Error(e) = run_tool("aplicar_timbre", &args, &with_preset(&p, true))
+        else {
+            panic!("esperava erro")
+        };
+        assert!(
+            e.contains("Pergunte") && e.contains("P29-1 \"Teste\" (banco de usuário)"),
+            "{e}"
+        );
+        assert!(e.contains("não salvas"), "{e}");
+        // preset diferente do carregado
+        args["preset"] = json!("P01-1");
+        let ToolOutcome::Error(e) = run_tool("aplicar_timbre", &args, &with_preset(&p, false))
+        else {
+            panic!("esperava erro")
+        };
+        assert!(
+            e.contains("não P01-1") && e.contains("você não troca de preset"),
+            "{e}"
+        );
+        // pedaleira desconectada
+        args["preset"] = json!("P29-1");
+        assert!(matches!(
+            run_tool("aplicar_timbre", &args, &ctx()),
+            ToolOutcome::Error(_)
+        ));
+        // confirmado (maiúsculas não importam)
+        args["preset"] = json!("p29-1");
+        assert!(matches!(
+            run_tool("aplicar_timbre", &args, &with_preset(&p, false)),
+            ToolOutcome::Apply(_, blocks) if blocks.len() == 3
+        ));
+        // preset_atual avisa das alterações não salvas
+        let ToolOutcome::Text(t) = run_tool("preset_atual", &json!({}), &with_preset(&p, true))
+        else {
+            panic!("esperava texto")
+        };
+        assert!(
+            t.starts_with("P29-1 \"Teste\" (banco de usuário) — COM ALTERAÇÕES NÃO SALVAS"),
+            "{t}"
+        );
     }
 
     fn proposal_json() -> Value {
@@ -495,12 +615,14 @@ mod tests {
         ));
         assert!(matches!(
             run_tool("aplicar_timbre", &proposal_json(), &ctx()),
-            ToolOutcome::Apply(_, blocks) if blocks.len() == 3
+            ToolOutcome::Error(_) // sem pedaleira conectada
         ));
-        let bad = json!({"title": "t", "explanation": "e", "blocks": [
+        let p = p29();
+        let bad = json!({"preset": "P29-1", "title": "t", "explanation": "e", "blocks": [
             {"module": "AMP", "algorithm": "Marshall 800", "on": true, "params": {}}
         ]});
-        let ToolOutcome::Error(err) = run_tool("aplicar_timbre", &bad, &ctx()) else {
+        let ToolOutcome::Error(err) = run_tool("aplicar_timbre", &bad, &with_preset(&p, false))
+        else {
             panic!("esperava erro")
         };
         assert!(

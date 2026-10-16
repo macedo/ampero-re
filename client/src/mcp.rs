@@ -40,10 +40,16 @@ marcante e diga qual escolheu.
 valores. Use somente algoritmos e parâmetros que existem; se não houver equivalente exato, escolha o mais \
 próximo e diga isso.
 4. Para ajustar algo que o usuário já tem, leia antes o preset_atual e mude só o necessário.
-5. Aplique com aplicar_timbre, só com os blocos que mudam (valores na unidade exibida, ex.: 450 para 450 ms). \
-Desligue (on: false) blocos que atrapalhariam o timbre, combine o CAB com o AMP, use o NR em ganho alto e \
-mantenha o volume de saída parecido com o de antes. Se a ferramenta apontar erros, corrija e aplique de novo.
-6. Responda com um resumo curto: bloco, algoritmo e os valores principais; o porquê das escolhas em poucas \
+5. SEMPRE confirme o preset antes de aplicar: leia o preset_atual, diga ao usuário qual está carregado (rótulo \
+e nome, ex.: \"P29-1 'Meu Lead'\") e pergunte se é nele que ele quer o timbre. Se ele tiver alterações não \
+salvas, avise que serão substituídas. Se o usuário quiser outro preset, peça para ele selecionar na pedaleira ou \
+no app (você não troca de preset) e leia o preset_atual de novo. Nunca suponha o preset nem reaproveite uma \
+confirmação antiga depois que o preset mudou.
+6. Aplique com aplicar_timbre passando em `preset` o rótulo confirmado, só com os blocos que mudam (valores na \
+unidade exibida, ex.: 450 para 450 ms). Desligue (on: false) blocos que atrapalhariam o timbre, combine o CAB \
+com o AMP, use o NR em ganho alto e mantenha o volume de saída parecido com o de antes. Se a ferramenta apontar \
+erros, corrija e aplique de novo.
+7. Responda com um resumo curto: bloco, algoritmo e os valores principais; o porquê das escolhas em poucas \
 frases; e dicas de execução (captador, volume da guitarra, palhetada).
 
 aplicar_timbre muda só o buffer de edição: nada é salvo. Lembre o usuário de ouvir e salvar pela pedaleira ou \
@@ -167,13 +173,15 @@ fn prompt_get(params: &Value) -> Result<Value, String> {
             if let Some(g) = arg("guitarra") {
                 t += &format!("\nMinha guitarra: {g}. Leve os captadores em conta.");
             }
-            t + "\n\nLembre o equipamento original, consulte o catálogo do Ampero antes de escolher, aplique com \
-                 aplicar_timbre e me dê um resumo curto (bloco, algoritmo e valores principais), o porquê das \
-                 escolhas e dicas de execução."
+            t + "\n\nLembre o equipamento original e consulte o catálogo do Ampero antes de escolher. Antes de \
+                 aplicar, me diga qual preset está carregado e pergunte se é nele que eu quero. Depois da minha \
+                 confirmação, aplique com aplicar_timbre e me dê um resumo curto (bloco, algoritmo e valores \
+                 principais), o porquê das escolhas e dicas de execução."
         }
         "ajustar_timbre" => format!(
-            "Leia o preset atual do Ampero e ajuste: {}.\n\nMude só o necessário, aplique com aplicar_timbre e \
-             diga o que mudou e por quê, em poucas frases.",
+            "Leia o preset atual do Ampero e ajuste: {}.\n\nAntes de aplicar, me diga qual preset está carregado \
+             e confirme comigo. Mude só o necessário, aplique com aplicar_timbre e diga o que mudou e por quê, \
+             em poucas frases.",
             arg("pedido").unwrap_or_default()
         ),
         _ => "Leia o preset atual do Ampero e explique, bloco a bloco, o que cada um faz no timbre (com o \
