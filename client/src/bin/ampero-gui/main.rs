@@ -44,6 +44,10 @@ struct App {
     current: Option<Preset>,
     selected_block: usize,
     confirm_save: bool,
+    /// Renomeando o preset no cabeçalho: texto em edição, erro de validação e pedido de foco.
+    name_edit: Option<(u16, String)>,
+    name_edit_error: Option<String>,
+    name_edit_focus: bool,
     /// Último evento recebido da pedaleira e quando chegou.
     activity: Option<(String, std::time::Instant)>,
     /// Blocos cujo liga/desliga foi feito na pedaleira (CTRL, footswitch): uso ao vivo, não conta como "não salvo".
@@ -75,6 +79,9 @@ impl App {
             current: None,
             selected_block: 2,
             confirm_save: false,
+            name_edit: None,
+            name_edit_error: None,
+            name_edit_focus: false,
             activity: None,
             pedal_switched: [false; 9],
             resources: ampero::resources::Resources::locate(),
@@ -139,17 +146,10 @@ impl App {
     /// Executa uma ferramenta pedida por um cliente MCP (Claude Desktop/Claude Code). Devolve (texto, é erro).
     fn run_mcp_tool(&mut self, name: &str, args: &serde_json::Value) -> (String, bool) {
         use ampero::timbre::{ToolContext, ToolOutcome, run_tool};
-        // mesma regra do "não salvo" do cabeçalho
-        let unsaved = self.current.as_ref().is_some_and(|cur| {
-            self.presets
-                .iter()
-                .find(|p| p.index == cur.index)
-                .is_some_and(|s| !same_sound(s, cur, &self.pedal_switched))
-        });
         let ctx = ToolContext {
             preset: self.current.as_ref(),
             resources: self.resources.as_ref(),
-            unsaved,
+            unsaved: self.is_unsaved(),
         };
         match run_tool(name, args, &ctx) {
             ToolOutcome::Text(t) => (t, false),
@@ -174,7 +174,35 @@ impl App {
                     false,
                 )
             }
+            ToolOutcome::Save { label, name } => {
+                // run_tool já conferiu: preset carregado, banco de usuário e rótulo confirmado
+                let Some(cur) = self.current.as_mut() else {
+                    return (
+                        "A pedaleira não está conectada no app; nada foi salvo.".into(),
+                        true,
+                    );
+                };
+                cur.name = name.clone();
+                let (bank, slot) = (cur.bank, cur.slot);
+                self.send(Cmd::Save {
+                    bank,
+                    slot,
+                    name: name.clone(),
+                });
+                self.status = format!("Claude salvou {label} “{name}”");
+                (format!("Salvo em {label} \"{name}\"."), false)
+            }
         }
+    }
+
+    /// O buffer difere do preset gravado: som (como no cabeçalho) ou nome editado no app.
+    fn is_unsaved(&self) -> bool {
+        self.current.as_ref().is_some_and(|cur| {
+            self.presets
+                .iter()
+                .find(|p| p.index == cur.index)
+                .is_some_and(|s| !same_sound(s, cur, &self.pedal_switched) || s.name != cur.name)
+        })
     }
 
     fn send(&self, cmd: Cmd) {
@@ -770,15 +798,76 @@ impl App {
         }
     }
 
-    fn header(&mut self, ui: &mut egui::Ui, cur: &Preset) {
+    /// Nome do preset no cabeçalho: clicar abre um campo para renomear (Enter confirma, Esc cancela). O nome
+    /// novo deixa o preset "não salvo" e vai para a pedaleira junto com o Salvar, como no editor oficial.
+    fn name_editor(&mut self, ui: &mut egui::Ui, cur: &mut Preset) {
+        // a edição pertence ao preset em que começou: se ele trocou, descarta
+        if self
+            .name_edit
+            .as_ref()
+            .is_some_and(|(index, _)| *index != cur.index)
+        {
+            self.name_edit = None;
+            self.name_edit_error = None;
+        }
+        let Some((_, buf)) = self.name_edit.as_mut() else {
+            let text = RichText::new(&cur.name).size(22.0).strong();
+            if cur.bank == 0 {
+                ui.label(text)
+                    .on_hover_text("Presets de fábrica não podem ser renomeados");
+                return;
+            }
+            let resp = ui
+                .add(egui::Label::new(text).sense(egui::Sense::click()))
+                .on_hover_cursor(egui::CursorIcon::Text)
+                .on_hover_text("Clique para renomear");
+            if resp.clicked() {
+                self.name_edit = Some((cur.index, cur.name.clone()));
+                self.name_edit_error = None;
+                self.name_edit_focus = true;
+            }
+            return;
+        };
+        let resp = ui.add(
+            egui::TextEdit::singleline(buf)
+                .char_limit(16)
+                .font(egui::FontId::proportional(20.0))
+                .desired_width(230.0)
+                .hint_text("nome do preset"),
+        );
+        if std::mem::take(&mut self.name_edit_focus) {
+            resp.request_focus();
+        }
+        let escape = ui.input(|i| i.key_pressed(egui::Key::Escape));
+        if escape {
+            self.name_edit = None;
+        } else if resp.lost_focus() {
+            match ampero::timbre::validate_preset_name(buf) {
+                Ok(name) => {
+                    cur.name = name;
+                    self.name_edit = None;
+                }
+                Err(e) => {
+                    self.name_edit_error = Some(e);
+                    self.name_edit_focus = true;
+                }
+            }
+        }
+        if let Some(e) = &self.name_edit_error {
+            ui.colored_label(Color32::from_rgb(230, 110, 100), e);
+        } else if self.name_edit.is_some() {
+            ui.label(RichText::new("Enter confirma, Esc cancela").small().weak());
+        }
+    }
+
+    fn header(&mut self, ui: &mut egui::Ui, cur: &mut Preset) {
         ui.horizontal(|ui| {
-            ui.label(
-                RichText::new(format!("{}  {}", cur.label, cur.name))
-                    .size(22.0)
-                    .strong(),
-            );
+            ui.label(RichText::new(&cur.label).size(22.0).strong());
+            self.name_editor(ui, cur);
             let saved = self.presets.iter().find(|p| p.index == cur.index);
-            if saved.is_some_and(|s| !same_sound(s, cur, &self.pedal_switched)) {
+            if saved
+                .is_some_and(|s| !same_sound(s, cur, &self.pedal_switched) || s.name != cur.name)
+            {
                 ui.label(RichText::new("não salvo").color(accent(ui)));
             }
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -840,7 +929,7 @@ impl eframe::App for App {
                 });
                 return;
             };
-            self.header(ui, &cur);
+            self.header(ui, &mut cur);
             ui.separator();
             self.chain(ui, &mut cur);
             ui.separator();
