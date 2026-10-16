@@ -74,6 +74,47 @@ impl AppMenu {
             .unwrap_or_default()
     }
 
+    fn open_mcp_window(&mut self) {
+        self.show_mcp = true;
+        self.mcp_install_status = None;
+    }
+
+    /// Indicador na barra superior (só com o servidor MCP ligado): verde quando atende, vermelho com
+    /// erro. Clicar abre a janela "Conectar ao Claude".
+    pub fn mcp_indicator(&mut self, ui: &mut egui::Ui, act: bool) {
+        if !self.settings.mcp_enabled {
+            return;
+        }
+        let (color, hover) = match (&self.mcp, &self.mcp_error) {
+            (Some(s), _) => (
+                egui::Color32::from_rgb(80, 200, 120),
+                format!(
+                    "Servidor MCP ligado em 127.0.0.1:{}: o Claude Desktop/Claude Code pode montar timbres.\n\
+                     Clique para ver ou mudar a conexão.",
+                    s.port
+                ),
+            ),
+            (None, Some(e)) => (
+                egui::Color32::from_rgb(220, 80, 80),
+                format!("Servidor MCP com erro: {e}\nClique para ver."),
+            ),
+            (None, None) => (egui::Color32::GRAY, "Servidor MCP iniciando…".to_string()),
+        };
+        // layout da direita para a esquerda: o texto entra primeiro e a bolinha fica à esquerda dele
+        let label = egui::Label::new(RichText::new("MCP").strong().color(color))
+            .sense(egui::Sense::click());
+        let text = ui.add(label);
+        let (rect, dot) = ui.allocate_exact_size(egui::vec2(10.0, 10.0), egui::Sense::click());
+        ui.painter().circle_filled(rect.center(), 4.5, color);
+        let resp = text
+            .union(dot)
+            .on_hover_cursor(egui::CursorIcon::PointingHand)
+            .on_hover_text(hover);
+        if resp.clicked() && act {
+            self.open_mcp_window();
+        }
+    }
+
     fn set_mcp_enabled(&mut self, on: bool) {
         self.settings.mcp_enabled = on;
         self.mcp_error = None;
@@ -151,20 +192,13 @@ impl AppMenu {
                 }
             }
             ui.separator();
-            let mut on = self.settings.mcp_enabled;
             if ui
-                .checkbox(&mut on, "Servidor MCP (Claude Desktop)")
-                .on_hover_text(
-                    "Deixa o Claude Desktop ou o Claude Code montarem timbres com a sua assinatura",
-                )
-                .changed()
+                .button("Conectar ao Claude…")
+                .on_hover_text("Servidor MCP: o Claude Desktop ou o Claude Code montam timbres com a sua assinatura")
+                .clicked()
                 && act
             {
-                self.set_mcp_enabled(on);
-            }
-            if ui.button("Conectar ao Claude…").clicked() && act {
-                self.show_mcp = true;
-                self.mcp_install_status = None;
+                self.open_mcp_window();
                 ui.close();
             }
             ui.separator();

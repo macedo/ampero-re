@@ -304,6 +304,7 @@ impl App {
             let act = self.first_pass;
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 self.menu.menu_button(ui, act);
+                self.menu.mcp_indicator(ui, act); // da direita para a esquerda: fica antes do ⚙
             });
         });
     }

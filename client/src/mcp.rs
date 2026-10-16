@@ -303,7 +303,7 @@ pub struct RemoteHost {
 impl ToolHost for RemoteHost {
     fn call(&mut self, name: &str, args: &Value) -> (String, bool) {
         const CLOSED: &str = "A GUI do Ampero não está aberta, ou o servidor MCP está desligado (menu ⚙ → \
-                              \"Servidor MCP\"). Peça ao usuário para abrir o app e ligar o servidor.";
+                              \"Conectar ao Claude…\" → Ligar). Peça ao usuário para abrir o app e ligar o servidor.";
         let token = match token_path().and_then(|p| std::fs::read_to_string(p).ok()) {
             Some(t) => t.trim().to_string(),
             None => return (CLOSED.into(), true),

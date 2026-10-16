@@ -59,10 +59,11 @@ sempre conferidos relendo o buffer ou ressincronizando.
 O Claude Desktop (ou o Claude Code) monta timbres de músicas, bandas ou estilos usando **só o que o Ampero tem**,
 por [MCP](https://modelcontextprotocol.io), com a assinatura Pro/Max do usuário (sem chave de API).
 
-1. Na GUI, menu ⚙ → **Servidor MCP (Claude Desktop)**. A GUI aberta passa a atender em `127.0.0.1:47800`
+1. Na GUI, menu ⚙ → **Conectar ao Claude…** → **Ligar**. A GUI aberta passa a atender em `127.0.0.1:47800`
    (porta em `gui.json`); só programas desta máquina com o token de `mcp-token` (na pasta de configuração) entram,
-   e requisições de páginas web são recusadas.
-2. Menu ⚙ → **Conectar ao Claude…** → **Configurar o Claude Desktop**: acrescenta `ampero` em `mcpServers` no
+   e requisições de páginas web são recusadas. Ligado, aparece **● MCP** na barra superior (verde = atendendo,
+   vermelho = erro); clicar nele abre a mesma janela.
+2. Na mesma janela, **Configurar o Claude Desktop**: acrescenta `ampero` em `mcpServers` no
    `claude_desktop_config.json` (com backup), apontando para `ampero mcp`. Feche o Claude Desktop pela bandeja e
    abra de novo. No Claude Code: `claude mcp add ampero -- "<pasta do app>/ampero" mcp`.
 3. Peça no Claude: "monte no Ampero o timbre do solo de Comfortably Numb".
