@@ -53,6 +53,20 @@ pub struct AssistantPanel {
     collapsed: bool,
     /// Chegou resposta enquanto o painel estava recolhido.
     unread: bool,
+    /// Modelos lidos da API de cada provedor (na ordem de `Provider::ALL`).
+    fetched_models: [Vec<String>; 3],
+    /// Busca de modelos em andamento.
+    models_rx: Option<Receiver<ModelList>>,
+    models_status: String,
+    /// "Outro…" escolhido no seletor: o modelo é digitado à mão.
+    custom_model: bool,
+}
+
+/// Resultado de uma busca de modelos: (provedor, ids ou erro).
+type ModelList = (Provider, Result<Vec<String>, String>);
+
+fn provider_index(p: Provider) -> usize {
+    Provider::ALL.iter().position(|&x| x == p).unwrap_or(0)
 }
 
 const SUGGESTIONS: [&str; 4] = [
@@ -109,6 +123,10 @@ impl AssistantPanel {
             settings_status: String::new(),
             collapsed: false,
             unread: false,
+            fetched_models: Default::default(),
+            models_rx: None,
+            models_status: String::new(),
+            custom_model: false,
         }
     }
 
@@ -313,6 +331,20 @@ impl AssistantPanel {
         let Some(mut draft) = self.settings.take() else {
             return;
         };
+        if let Some(rx) = &self.models_rx
+            && let Ok((provider, result)) = rx.try_recv()
+        {
+            self.models_rx = None;
+            self.models_status = match result {
+                Ok(ids) if ids.is_empty() => "a API não listou nenhum modelo".into(),
+                Ok(ids) => {
+                    let n = ids.len();
+                    self.fetched_models[provider_index(provider)] = ids;
+                    format!("{n} modelos disponíveis para a sua chave")
+                }
+                Err(e) => e,
+            };
+        }
         let mut keep_open = true;
         let mut save = false;
         egui::Window::new("Configurar assistente")
@@ -327,7 +359,10 @@ impl AssistantPanel {
                         .selected_text(draft.provider.label())
                         .show_ui(ui, |ui| {
                             for p in Provider::ALL {
-                                ui.selectable_value(&mut draft.provider, p, p.label());
+                                if ui.selectable_value(&mut draft.provider, p, p.label()).changed() {
+                                    self.custom_model = false;
+                                    self.models_status.clear();
+                                }
                             }
                         });
                     ui.end_row();
@@ -337,7 +372,64 @@ impl AssistantPanel {
                     ui.add(egui::TextEdit::singleline(&mut ep.base_url).desired_width(320.0));
                     ui.end_row();
                     ui.label("Modelo");
-                    ui.add(egui::TextEdit::singleline(&mut ep.model).desired_width(320.0));
+                    ui.vertical(|ui| {
+                        let mut models: Vec<String> =
+                            provider.suggested_models().iter().map(|m| m.to_string()).collect();
+                        for m in &self.fetched_models[provider_index(provider)] {
+                            if !models.contains(m) {
+                                models.push(m.clone());
+                            }
+                        }
+                        let listed = models.contains(&ep.model);
+                        let custom = self.custom_model || !listed;
+                        ui.horizontal(|ui| {
+                            egui::ComboBox::from_id_salt("model")
+                                .width(220.0)
+                                .selected_text(if custom { "Outro…" } else { ep.model.as_str() })
+                                .show_ui(ui, |ui| {
+                                    for m in &models {
+                                        if ui.selectable_label(!custom && ep.model == *m, m).clicked() {
+                                            ep.model = m.clone();
+                                            self.custom_model = false;
+                                        }
+                                    }
+                                    if ui.selectable_label(custom, "Outro…").clicked() {
+                                        self.custom_model = true;
+                                    }
+                                });
+                            let busy = self.models_rx.is_some();
+                            let button = ui
+                                .add_enabled(!busy, egui::Button::new("Buscar na API"))
+                                .on_hover_text("Lista os modelos que a sua chave pode usar");
+                            if busy {
+                                ui.spinner();
+                            }
+                            if button.clicked() && act {
+                                let mut cfg = Config { provider, ..Config::default() };
+                                *cfg.endpoint_mut() = ep.clone();
+                                let (tx, rx) = channel();
+                                let repaint = ctx.clone();
+                                thread::spawn(move || {
+                                    let r = assistant::list_models(&cfg, &HttpTransport::default())
+                                        .map_err(|e| format!("{e:#}"));
+                                    let _ = tx.send((provider, r));
+                                    repaint.request_repaint();
+                                });
+                                self.models_rx = Some(rx);
+                                self.models_status = "buscando…".into();
+                            }
+                        });
+                        if custom {
+                            ui.add(
+                                egui::TextEdit::singleline(&mut ep.model)
+                                    .hint_text("nome exato do modelo")
+                                    .desired_width(320.0),
+                            );
+                        }
+                        if !self.models_status.is_empty() {
+                            ui.label(RichText::new(&self.models_status).small().weak());
+                        }
+                    });
                     ui.end_row();
                     ui.label("Chave da API");
                     let hint = provider.key_env().map_or("opcional".to_string(), |v| format!("vazio = usar {v}"));

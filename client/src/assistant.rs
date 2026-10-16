@@ -46,6 +46,15 @@ impl Provider {
             Provider::Compatible => None,
         }
     }
+
+    /// Modelos oferecidos no seletor antes de consultar a API (a lista real vem de [`list_models`]).
+    pub fn suggested_models(self) -> &'static [&'static str] {
+        match self {
+            Provider::Claude => &["claude-opus-5-5", "claude-sonnet-5-5", "claude-haiku-5-5"],
+            Provider::ChatGpt => &["gpt-5", "gpt-5-mini"],
+            Provider::Compatible => &[],
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -185,6 +194,66 @@ impl Config {
             .and_then(|v| std::env::var(v).ok())
             .unwrap_or_default()
     }
+
+    /// Cabeçalhos de autenticação do provedor atual.
+    fn auth_headers(&self) -> Vec<(String, String)> {
+        let key = self.api_key();
+        match self.provider {
+            Provider::Claude => vec![
+                ("x-api-key".to_string(), key),
+                ("anthropic-version".to_string(), "2023-06-01".to_string()),
+            ],
+            _ if key.is_empty() => Vec::new(),
+            _ => vec![("Authorization".to_string(), format!("Bearer {key}"))],
+        }
+    }
+}
+
+/// Modelos que a chave configurada pode usar, consultados na API do provedor (`GET /v1/models` na
+/// Anthropic, `GET /models` no formato OpenAI). Na OpenAI oficial, tira os que não conversam
+/// (embeddings, áudio, imagem…).
+pub fn list_models(cfg: &Config, transport: &dyn Transport) -> Result<Vec<String>> {
+    if cfg.api_key().is_empty() && cfg.provider != Provider::Compatible {
+        bail!(
+            "sem chave da API: informe-a acima ou defina {}",
+            cfg.provider.key_env().unwrap_or("")
+        );
+    }
+    let base = cfg.endpoint().base_url.trim_end_matches('/');
+    let url = match cfg.provider {
+        Provider::Claude => format!("{base}/v1/models?limit=100"),
+        _ => format!("{base}/models"),
+    };
+    let (status, resp) = transport.get(&url, &cfg.auth_headers())?;
+    if status != 200 {
+        return Err(api_error(status, &resp));
+    }
+    let mut ids: Vec<String> = resp
+        .get("data")
+        .and_then(Value::as_array)
+        .context("resposta sem a lista \"data\"")?
+        .iter()
+        .filter_map(|m| m.get("id").and_then(Value::as_str))
+        .map(str::to_string)
+        .collect();
+    if cfg.provider == Provider::ChatGpt {
+        const NOT_CHAT: [&str; 9] = [
+            "embedding",
+            "tts",
+            "whisper",
+            "dall-e",
+            "image",
+            "moderation",
+            "audio",
+            "realtime",
+            "transcribe",
+        ];
+        ids.retain(|id| !NOT_CHAT.iter().any(|n| id.contains(n)));
+    }
+    if cfg.provider != Provider::Claude {
+        ids.sort(); // a Anthropic já devolve do mais novo para o mais antigo
+    }
+    Ok(ids)
 }
 
 // ---------------------------------------------------------------- propostas
@@ -561,9 +630,10 @@ pub fn run_tool(name: &str, input: &Value, ctx: &ToolContext) -> ToolOutcome {
 
 // ---------------------------------------------------------------- transporte HTTP
 
-/// POST JSON → (status HTTP, corpo JSON). Abstraído para os testes simularem respostas.
+/// POST/GET JSON → (status HTTP, corpo JSON). Abstraído para os testes simularem respostas.
 pub trait Transport {
     fn post(&self, url: &str, headers: &[(String, String)], body: &Value) -> Result<(u16, Value)>;
+    fn get(&self, url: &str, headers: &[(String, String)]) -> Result<(u16, Value)>;
 }
 
 #[cfg(feature = "assistant")]
@@ -590,17 +660,31 @@ impl Transport for HttpTransport {
         for (k, v) in headers {
             req = req.header(k.as_str(), v.as_str());
         }
-        let mut resp = req
+        let resp = req
             .send_json(body)
             .map_err(|e| anyhow!("falha de rede: {e}"))?;
-        let status = resp.status().as_u16();
-        let text = resp
-            .body_mut()
-            .read_to_string()
-            .map_err(|e| anyhow!("resposta ilegível: {e}"))?;
-        let json = serde_json::from_str(&text).unwrap_or_else(|_| json!({"raw": text}));
-        Ok((status, json))
+        read_json(resp)
     }
+
+    fn get(&self, url: &str, headers: &[(String, String)]) -> Result<(u16, Value)> {
+        let mut req = self.agent.get(url);
+        for (k, v) in headers {
+            req = req.header(k.as_str(), v.as_str());
+        }
+        let resp = req.call().map_err(|e| anyhow!("falha de rede: {e}"))?;
+        read_json(resp)
+    }
+}
+
+#[cfg(feature = "assistant")]
+fn read_json(mut resp: ureq::http::Response<ureq::Body>) -> Result<(u16, Value)> {
+    let status = resp.status().as_u16();
+    let text = resp
+        .body_mut()
+        .read_to_string()
+        .map_err(|e| anyhow!("resposta ilegível: {e}"))?;
+    let json = serde_json::from_str(&text).unwrap_or_else(|_| json!({"raw": text}));
+    Ok((status, json))
 }
 
 fn api_error(status: u16, body: &Value) -> anyhow::Error {
@@ -721,10 +805,7 @@ impl Conversation {
         let ep = self.cfg.claude.clone();
         let url = format!("{}/v1/messages", ep.base_url.trim_end_matches('/'));
         let official = ep.base_url.contains("api.anthropic.com");
-        let mut headers = vec![
-            ("x-api-key".to_string(), self.cfg.api_key()),
-            ("anthropic-version".to_string(), "2023-06-01".to_string()),
-        ];
+        let mut headers = self.cfg.auth_headers();
         if official && self.cfg.claude_server_fallback {
             headers.push((
                 "anthropic-beta".to_string(),
@@ -825,11 +906,7 @@ impl Conversation {
     ) -> Result<Turn> {
         let ep = self.cfg.endpoint().clone();
         let url = format!("{}/chat/completions", ep.base_url.trim_end_matches('/'));
-        let key = self.cfg.api_key();
-        let mut headers = Vec::new();
-        if !key.is_empty() {
-            headers.push(("Authorization".to_string(), format!("Bearer {key}")));
-        }
+        let headers = self.cfg.auth_headers();
         let tools: Vec<Value> = tool_specs()
             .into_iter()
             .map(|t| json!({"type": "function", "function": {"name": t.name, "description": t.description, "parameters": t.schema}}))
@@ -935,6 +1012,44 @@ mod tests {
                 .pop()
                 .ok_or_else(|| anyhow!("sem mais respostas"))
         }
+
+        fn get(&self, url: &str, headers: &[(String, String)]) -> Result<(u16, Value)> {
+            self.post(url, headers, &Value::Null)
+        }
+    }
+
+    #[test]
+    fn lists_models_from_the_provider_api() {
+        let fake = Fake::new(vec![(
+            200,
+            json!({"data": [{"id": "claude-opus-5-5"}, {"id": "claude-sonnet-5-5"}], "has_more": false}),
+        )]);
+        let ids = list_models(&cfg(Provider::Claude), &fake).unwrap();
+        assert_eq!(ids, ["claude-opus-5-5", "claude-sonnet-5-5"]);
+        let sent = fake.sent.borrow();
+        assert_eq!(sent[0].0, "https://api.anthropic.com/v1/models?limit=100");
+        assert!(
+            sent[0]
+                .1
+                .contains(&("x-api-key".into(), "chave-teste".into()))
+        );
+
+        let fake = Fake::new(vec![(
+            200,
+            json!({"data": [{"id": "gpt-5"}, {"id": "text-embedding-3-small"}, {"id": "gpt-5-mini"}, {"id": "tts-1"}]}),
+        )]);
+        let ids = list_models(&cfg(Provider::ChatGpt), &fake).unwrap();
+        assert_eq!(ids, ["gpt-5", "gpt-5-mini"]);
+        assert_eq!(fake.sent.borrow()[0].0, "https://api.openai.com/v1/models");
+
+        let fake = Fake::new(vec![(
+            401,
+            json!({"error": {"message": "invalid x-api-key"}}),
+        )]);
+        let err = list_models(&cfg(Provider::Claude), &fake)
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("401"), "{err}");
     }
 
     fn ctx() -> ToolContext<'static> {

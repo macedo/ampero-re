@@ -69,6 +69,9 @@ Configuração ("Configurar" no painel), salva em `%APPDATA%\ampero\assistant.js
 | ChatGPT (OpenAI) | `https://api.openai.com/v1` (formato chat/completions) | `OPENAI_API_KEY` ou campo na configuração |
 | Outro compatível | `http://localhost:11434/v1` (Ollama), LM Studio, OpenRouter… | opcional |
 
+- O modelo é escolhido num seletor: começa com os modelos conhecidos do provedor, **Buscar na API** lista os que a
+  sua chave pode usar (`GET /v1/models` na Anthropic, `GET /models` no formato OpenAI) e **Outro…** aceita
+  qualquer nome digitado (útil no Ollama/LM Studio).
 - O prompt de sistema é editável (com "Restaurar padrão").
 - No Claude, o **fallback automático** do servidor vem ligado: se um classificador de segurança recusar o pedido, a
   Anthropic refaz a resposta em outro modelo (`fallbacks: "default"`). Dá para desligar na configuração.
