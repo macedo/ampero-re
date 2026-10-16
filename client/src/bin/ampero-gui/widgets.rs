@@ -6,6 +6,20 @@ use std::f32::consts::PI;
 
 pub const GOLD: Color32 = Color32::from_rgb(240, 190, 70);
 
+/// Dourado para texto: o GOLD no tema escuro, um tom mais escuro (legível sobre branco) no claro.
+pub fn accent(ui: &egui::Ui) -> Color32 {
+    if ui.visuals().dark_mode {
+        GOLD
+    } else {
+        Color32::from_rgb(160, 110, 0)
+    }
+}
+
+/// Escolhe a cor conforme o tema atual.
+pub fn themed(ui: &egui::Ui, dark: Color32, light: Color32) -> Color32 {
+    if ui.visuals().dark_mode { dark } else { light }
+}
+
 /// Valor exibido com unidade real ("856 ms", "1.2 kHz", "+6 dB", "3.5").
 pub fn format_value(pm: &ParamMeta, raw: u16) -> String {
     let v = pm.display(raw);

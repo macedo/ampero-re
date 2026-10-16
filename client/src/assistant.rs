@@ -139,16 +139,7 @@ impl Default for Config {
 impl Config {
     /// `%APPDATA%\ampero\assistant.json`, `~/Library/Application Support/ampero/…` ou `~/.config/ampero/…`.
     pub fn path() -> Option<PathBuf> {
-        let base = if cfg!(windows) {
-            std::env::var_os("APPDATA").map(PathBuf::from)
-        } else if cfg!(target_os = "macos") {
-            std::env::var_os("HOME").map(|h| PathBuf::from(h).join("Library/Application Support"))
-        } else {
-            std::env::var_os("XDG_CONFIG_HOME")
-                .map(PathBuf::from)
-                .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".config")))
-        }?;
-        Some(base.join("ampero").join("assistant.json"))
+        Some(crate::config_dir()?.join("assistant.json"))
     }
 
     pub fn load() -> Config {
