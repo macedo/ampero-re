@@ -1077,12 +1077,9 @@ impl App {
                         .weak(),
                     );
                 }
-                // primeiro os CTRL que fazem efeito; os outros (footswitch que não está como CTRL/TAP no
-                // global) vêm recolhidos e esmaecidos, com os alvos que o preset guarda
-                let ctrls = (1..=4u8)
-                    .filter(|c| active & (1 << (c - 1)) != 0)
-                    .chain((1..=4u8).filter(|c| active & (1 << (c - 1)) == 0));
-                for ctrl in ctrls {
+                // em ordem numérica; os CTRL sem efeito (footswitch que não está como CTRL/TAP no global)
+                // vêm recolhidos e esmaecidos, com os alvos que o preset guarda
+                for ctrl in 1..=4u8 {
                     let bit = 1u8 << (ctrl - 1);
                     if active & bit != 0 {
                         Self::ctrl_section(ui, cur, ctrl, &mut changes);
