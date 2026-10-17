@@ -35,6 +35,11 @@ pub enum Cmd {
     SetTempo(u16),
     /// Ordem da cadeia: índices de armazenamento (FX1=0 … RVB=8) na ordem do sinal.
     SetChain(Vec<usize>),
+    /// Quais CTRL ligam/desligam o bloco (máscara, bit n = CTRL n+1).
+    SetCtrlTargets {
+        block: usize,
+        mask: u8,
+    },
     Save {
         bank: u8,
         slot: u8,
@@ -52,6 +57,8 @@ pub enum Evt {
     Synced {
         presets: Vec<Preset>,
         irs: Vec<Option<String>>,
+        /// Configurações globais (função dos footswitches); `None` se não deu para decodificar.
+        global: Option<ampero::global::GlobalSettings>,
         secs: f64,
     },
     Current(Preset),
@@ -215,7 +222,7 @@ fn handle(d: &mut Device, cmd: Cmd, emit: &impl Fn(Evt)) -> anyhow::Result<()> {
         Cmd::Sync => {
             let t0 = Instant::now();
             d.handshake(0)?;
-            d.global_state()?;
+            let global = d.global_settings().ok();
             let irs = (0..20)
                 .map(|i| d.name(0x07, i))
                 .collect::<anyhow::Result<Vec<_>>>()?;
@@ -233,6 +240,7 @@ fn handle(d: &mut Device, cmd: Cmd, emit: &impl Fn(Evt)) -> anyhow::Result<()> {
             emit(Evt::Synced {
                 presets,
                 irs,
+                global,
                 secs: t0.elapsed().as_secs_f64(),
             });
             emit(Evt::Current(d.read_edit_buffer()?));
@@ -268,6 +276,7 @@ fn handle(d: &mut Device, cmd: Cmd, emit: &impl Fn(Evt)) -> anyhow::Result<()> {
                 .ok_or_else(|| anyhow::anyhow!("ordem de cadeia inválida"))?;
             d.send(&msg)?;
         }
+        Cmd::SetCtrlTargets { block, mask } => d.send(&p::ctrl_targets(block, mask))?,
         Cmd::Save { bank, slot, name } => {
             d.send(&p::save_preset(bank, slot))?;
             d.send(&p::preset_name(bank, slot, &name))?;

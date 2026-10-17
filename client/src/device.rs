@@ -154,6 +154,18 @@ impl Device {
         self.request_cmd(&p::req_global_state(), [0x00, 0x02, 0x09])
     }
 
+    /// Dados do estado global já tirados dos nibbles (a partir do byte 13 da resposta).
+    pub fn global_data(&mut self) -> Result<Vec<u8>> {
+        let resp = self.global_state()?;
+        Ok(p::from_nibbles(&resp[13..resp.len() - 3]))
+    }
+
+    /// Configurações globais decodificadas (função dos footswitches).
+    pub fn global_settings(&mut self) -> Result<crate::global::GlobalSettings> {
+        let data = self.global_data()?;
+        crate::global::GlobalSettings::decode(&data).context("estado global curto demais")
+    }
+
     /// Nome da lista `kind` (0x05 capturas, 0x07 IRs). `None` para slot vazio.
     pub fn name(&mut self, kind: u8, index: u8) -> Result<Option<String>> {
         let resp = self.request(&p::req_name(kind, index), |r| {

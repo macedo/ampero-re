@@ -15,6 +15,12 @@ const QUICK_KNOBS_AT: usize = 0x18C;
 const CHAIN_AT: usize = 0x19A;
 /// Estado dos footswitches CTRL (bitmask; o CTRL do P01-1 liga o bit 0x08). Reportado pela notificação `02 06 23 VV`.
 const CTRL_STATE_AT: usize = 0x1AB;
+/// Alvos dos CTRL: um byte por bloco (ordem de armazenamento FX1 … RVB); bit n = o CTRL n+1 liga/desliga o bloco.
+/// Escrito pelo comando `12 00 00 00 BB VV` (capturado no CTRL/EXP do editor oficial em 2026-10-16).
+const CTRL_TARGETS_AT: usize = 0x01A;
+/// Funções dos CTRL 1–4, 2 bits cada (CTRL 1 nos bits 0–1 …): 0 = Module/Tap, 1 = Tap Tempo, 2 = EXP 1 On/Off.
+/// Só o CTRL 3 foi conferido (Tap Tempo → `0x10`); os outros seguem a mesma conta.
+const CTRL_FUNCTIONS_AT: usize = 0x023;
 /// Hipótese: Vol Position (1 = Pre). Também muda com a notificação `02 06 24 00 VV`, então pode ser estado de footswitch.
 const VOL_POSITION_AT: usize = 0x1AC;
 
@@ -55,6 +61,10 @@ pub struct Preset {
     pub tempo: u16,
     pub volume_pre: bool,
     pub ctrl_state: u8,
+    /// Por bloco (ordem de armazenamento): bit n = o CTRL n+1 liga/desliga o bloco.
+    pub ctrl_targets: [u8; 9],
+    /// Função de cada CTRL 1–4 (0 = Module/Tap, 1 = Tap Tempo, 2 = EXP 1 On/Off).
+    pub ctrl_functions: [u8; 4],
     pub blocks: Vec<Block>,
     pub chain: Vec<&'static str>,
     pub quick_knobs: Vec<Target>,
@@ -173,6 +183,8 @@ impl Preset {
             tempo: u16be(TEMPO_AT),
             volume_pre: raw[VOL_POSITION_AT] != 0,
             ctrl_state: raw[CTRL_STATE_AT],
+            ctrl_targets: std::array::from_fn(|k| raw[CTRL_TARGETS_AT + k] & 0x0F),
+            ctrl_functions: std::array::from_fn(|c| (raw[CTRL_FUNCTIONS_AT] >> (2 * c)) & 0x03),
             blocks,
             chain: chain_from_positions(&raw[CHAIN_AT..CHAIN_AT + 18]),
             quick_knobs,
@@ -204,13 +216,69 @@ impl Preset {
             );
         }
         s += &format!("    cadeia: {}\n", self.chain.join(" > "));
+        for ctrl in 1..=4 {
+            let blocks = self.ctrl_blocks(ctrl);
+            if !blocks.is_empty() || self.ctrl_functions[ctrl as usize - 1] != 0 {
+                s += &format!(
+                    "    CTRL {ctrl} ({}): {}\n",
+                    ctrl_function_name(self.ctrl_functions[ctrl as usize - 1]),
+                    blocks.join(", ")
+                );
+            }
+        }
         s
+    }
+
+    /// Blocos (na ordem da cadeia) que o CTRL `ctrl` (1–4) liga e desliga.
+    pub fn ctrl_blocks(&self, ctrl: u8) -> Vec<&'static str> {
+        let bit = 1u8 << (ctrl.clamp(1, 4) - 1);
+        self.chain
+            .iter()
+            .filter(|m| {
+                MODULES
+                    .iter()
+                    .position(|x| x == *m)
+                    .is_some_and(|k| self.ctrl_targets[k] & bit != 0)
+            })
+            .copied()
+            .collect()
+    }
+}
+
+/// Nome da função de um CTRL (byte `0x023`, 2 bits por CTRL).
+pub fn ctrl_function_name(f: u8) -> &'static str {
+    match f {
+        0 => "Module/Tap",
+        1 => "Tap Tempo",
+        2 => "EXP 1 On/Off",
+        _ => "?",
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn ctrl_targets_and_functions() {
+        // P33-3 lido do aparelho em 2026-10-16: CTRL 3 → FX1 (0x01A = 04), CTRL 4 → DLY (0x021 = 08)
+        let mut raw = vec![0u8; PRESET_LEN];
+        raw[0] = 1;
+        raw[1] = 98;
+        for (k, p) in [0u8, 1, 2, 4, 3, 5, 6, 7, 8].iter().enumerate() {
+            raw[CHAIN_AT + 2 * k] = *p;
+        }
+        raw[CTRL_TARGETS_AT] = 0x04;
+        raw[CTRL_TARGETS_AT + 7] = 0x08;
+        raw[CTRL_TARGETS_AT + 5] = 0x0C; // EQ nos CTRL 3 e 4
+        raw[CTRL_FUNCTIONS_AT] = 0x10; // CTRL 3 = Tap Tempo
+        let p = Preset::decode(226, &raw).unwrap();
+        assert_eq!(p.ctrl_blocks(3), ["FX1", "EQ"]);
+        assert_eq!(p.ctrl_blocks(4), ["EQ", "DLY"]);
+        assert!(p.ctrl_blocks(1).is_empty());
+        assert_eq!(p.ctrl_functions, [0, 0, 1, 0]);
+        assert_eq!(ctrl_function_name(p.ctrl_functions[2]), "Tap Tempo");
+    }
 
     #[test]
     fn chain_bytes_are_the_position_of_each_block() {

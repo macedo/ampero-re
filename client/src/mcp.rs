@@ -49,7 +49,11 @@ confirmação antiga depois que o preset mudou.
 unidade exibida, ex.: 450 para 450 ms). Desligue (on: false) blocos que atrapalhariam o timbre, combine o CAB \
 com o AMP, use o NR em ganho alto e mantenha o volume de saída parecido com o de antes. Se a ferramenta apontar \
 erros, corrija e aplique de novo.
-7. Responda com um resumo curto: bloco, algoritmo e os valores principais; o porquê das escolhas em poucas \
+7. Os CTRL (footswitches de CTRL) ligam e desligam blocos ao vivo; o preset_atual mostra o que cada um faz. \
+Quando o pedido tiver uma variação ao vivo (ex.: base e solo), deixe os blocos do solo no CTRL com o campo `ctrl` \
+de aplicar_timbre (ex.: {\"4\": [\"FX2\", \"DLY\"]}), usando o CTRL que o usuário já usa (veja no preset_atual \
+ou pergunte), e explique que o footswitch liga e desliga esses blocos.
+8. Responda com um resumo curto: bloco, algoritmo e os valores principais; o porquê das escolhas em poucas \
 frases; e dicas de execução (captador, volume da guitarra, palhetada).
 
 aplicar_timbre muda só o buffer de edição: nada é salvo. Lembre o usuário de ouvir e, se gostar, salvar pela \

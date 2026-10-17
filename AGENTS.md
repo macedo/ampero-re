@@ -6,9 +6,10 @@ multiplataforma em Rust (CLI + GUI egui) em [`client/`](client/). Fluxo de PR e 
 
 ## Regras do projeto
 
-- **Preset de teste: só o P29-1.** Para editar e salvar no aparelho, use somente o P29-1 do banco de usuário;
-  os outros são usados pelo dono e não podem mudar. Não descarte os ajustes que o dono fez no P29-1. Se um teste
-  mexer no buffer de outro preset (knob, scroll), volte o valor original e avise.
+- **Preset de teste: só o P33-3** (desde 2026-10-16; antes era o P29-1). Para editar e salvar no aparelho, use
+  somente o P33-3 do banco de usuário; os outros são usados pelo dono e não podem mudar. Trocar de preset descarta
+  alterações não salvas do que estiver carregado: pergunte antes. Se um teste mexer no buffer de outro preset
+  (knob, scroll, arraste), volte o valor original e avise.
 - **Nunca use atualização de firmware** (nem pelo Ampero Editor oficial nem por comando do protocolo): ela apaga
   os presets da pedaleira. Se uma tarefa parecer exigir firmware, pare e pergunte.
 - **Todo código entra por PR.** A `main` é protegida (CI obrigatório, inclusive para admin). Commit, push, merge
