@@ -134,6 +134,22 @@ F0 21 25 7F 4D 50 2D 64  12 00 02 06 07  BB PP                F7   gravar buffer
 - Clicar num bloco na UI reenvia "selecionar algoritmo" com o algoritmo atual.
 - Salvar não gerou resposta do aparelho.
 
+### Estado global (`11 00 02 09 00`)
+
+Resposta de 216 bytes; os dados vêm em nibbles a partir do byte 13 (100 bytes). Decodificado até agora:
+
+| Offset | Tam. | Campo | Observações |
+|---|---|---|---|
+| `0x0F` | 4×2 | **footswitches 1–4** | pares (Tap, Hold). Tap na ordem da lista do editor: 0 None, 1–3 Patch 1–3, 4 Patch −, 5 Patch +, 6 Bank −, 7 Bank +, 8 Tuner, 9 Looper, 10 Drum, 11–19 FX1…RVB On/Off, **20 CTRL/TAP**. No Hold, 20 = Tap Tempo. Aparelho do dono: `01 00 02 00 03 08 14 14` (FS1–3 = Patch 1–3, FS3 segura = Tuner, FS4 = CTRL/TAP, segura = Tap Tempo) |
+| `0x17` | 3 | combinações 1+2, 2+3, 3+4 | `06 07 09` = Bank −, Bank +, Looper (mesma lista) |
+
+Escrita: `12 00 02 01 II VV`, com II = índice a partir de `0x0F` (0 = Tap do FS1, 1 = Hold do FS1, … 4 = Tap do FS3).
+Atenção: ao abrir a tela de configurações, o editor oficial regrava os parâmetros dos footswitches 1–3, e ao trocar o
+Tap para CTRL/TAP ele muda o Hold na tela. Capturado e restaurado em 2026-10-16 (global conferido byte a byte).
+
+O **CTRL n só faz efeito se o Tap do footswitch n for CTRL/TAP**; os alvos dos outros CTRL ficam guardados no preset,
+mas pisar no footswitch faz outra coisa (troca de patch etc.).
+
 ### Notificações do aparelho (mudanças feitas no hardware)
 
 Capturadas com `ampero monitor` enquanto o usuário usava CTRL, knobs, footswitches e troca de preset

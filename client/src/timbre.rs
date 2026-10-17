@@ -24,7 +24,11 @@ pub struct Proposal {
 
 /// Novas máscaras de CTRL por bloco (índice de armazenamento, máscara) para os CTRL citados em `p.ctrl`,
 /// partindo das atuais (`current`, bit n = CTRL n+1). Só devolve os blocos que mudam.
-pub fn resolve_ctrl(p: &Proposal, current: &[u8; 9]) -> Result<Vec<(usize, u8)>, Vec<String>> {
+pub fn resolve_ctrl(
+    p: &Proposal,
+    current: &[u8; 9],
+    active: u8,
+) -> Result<Vec<(usize, u8)>, Vec<String>> {
     let mut next = *current;
     let mut errs = Vec::new();
     for (key, blocks) in &p.ctrl {
@@ -39,6 +43,13 @@ pub fn resolve_ctrl(p: &Proposal, current: &[u8; 9]) -> Result<Vec<(usize, u8)>,
             continue;
         };
         let bit = 1u8 << (n - 1);
+        if active & bit == 0 {
+            errs.push(format!(
+                "ctrl {n}: o footswitch {n} não está como CTRL/TAP nas configurações globais, então o CTRL {n} \
+                 não faz efeito; use um CTRL ativo (veja o preset_atual)"
+            ));
+            continue;
+        }
         next.iter_mut().for_each(|m| *m &= !bit);
         for b in blocks {
             match module_index(b) {
@@ -323,6 +334,9 @@ pub struct ToolContext<'a> {
     pub resources: Option<&'a Resources>,
     /// O preset carregado tem alterações não salvas (aplicar um timbre por cima as substitui).
     pub unsaved: bool,
+    /// CTRL que fazem efeito (bit n = CTRL n+1): footswitches como CTRL/TAP nas configurações globais.
+    /// 0x0F quando o global não é conhecido.
+    pub active_ctrls: u8,
 }
 
 /// "P01-1 \"Marshall Drive\" (banco de usuário)", para o Claude repetir ao usuário.
@@ -559,8 +573,19 @@ pub fn run_tool(name: &str, input: &Value, ctx: &ToolContext) -> ToolOutcome {
                         if b.on { "on" } else { "off" }
                     );
                 }
-                // o que cada CTRL (footswitch) faz neste preset
-                for ctrl in 1..=4u8 {
+                // o que cada CTRL (footswitch) faz neste preset — só os que fazem efeito no global
+                let inactive: Vec<String> = (1..=4u8)
+                    .filter(|c| ctx.active_ctrls & (1 << (c - 1)) == 0)
+                    .map(|c| c.to_string())
+                    .collect();
+                if !inactive.is_empty() {
+                    s += &format!(
+                        "CTRL {}: sem efeito (os footswitches não estão como CTRL/TAP nas configurações \
+                         globais); não use.\n",
+                        inactive.join(", ")
+                    );
+                }
+                for ctrl in (1..=4u8).filter(|c| ctx.active_ctrls & (1 << (c - 1)) != 0) {
                     let blocks = p.ctrl_blocks(ctrl);
                     let function = p.ctrl_functions[ctrl as usize - 1];
                     let acionado = if p.ctrl_state & (1 << (ctrl - 1)) != 0 {
@@ -593,7 +618,7 @@ pub fn run_tool(name: &str, input: &Value, ctx: &ToolContext) -> ToolOutcome {
                     } else {
                         resolve(&p)
                     },
-                    resolve_ctrl(&p, &current.ctrl_targets),
+                    resolve_ctrl(&p, &current.ctrl_targets, ctx.active_ctrls),
                 ) {
                     (Ok(blocks), Ok(ctrl)) => ToolOutcome::Apply(p, blocks, ctrl),
                     (blocks, ctrl) => {
@@ -639,6 +664,7 @@ mod tests {
             preset: None,
             resources: None,
             unsaved: false,
+            active_ctrls: 0x0F,
         }
     }
 
@@ -656,6 +682,7 @@ mod tests {
             preset: Some(p),
             resources: None,
             unsaved,
+            active_ctrls: 0x0F,
         }
     }
 
@@ -709,6 +736,36 @@ mod tests {
             panic!("esperava erro")
         };
         assert!(e.contains("banco de fábrica"), "{e}");
+    }
+
+    #[test]
+    fn only_ctrls_active_in_the_global_settings_count() {
+        // como na pedaleira do dono: FS1–3 trocam patch, só o FS4 é CTRL/TAP
+        let mut p = p29();
+        p.ctrl_targets[0] = 0x04; // FX1 no CTRL 3 (sem efeito)
+        p.ctrl_targets[7] = 0x08; // DLY no CTRL 4
+        let ctx = ToolContext {
+            active_ctrls: 0b1000,
+            ..with_preset(&p, false)
+        };
+        let ToolOutcome::Text(t) = run_tool("preset_atual", &json!({}), &ctx) else {
+            panic!("esperava texto")
+        };
+        assert!(t.contains("CTRL 1, 2, 3: sem efeito"), "{t}");
+        assert!(t.contains("CTRL 4 (Module/Tap): liga/desliga DLY"), "{t}");
+        assert!(!t.contains("liga/desliga FX1"), "{t}");
+        let mut args = proposal_json();
+        args["preset"] = json!("P29-1");
+        args["ctrl"] = json!({"3": ["FX3"]});
+        let ToolOutcome::Error(e) = run_tool("aplicar_timbre", &args, &ctx) else {
+            panic!("esperava erro")
+        };
+        assert!(e.contains("footswitch 3 não está como CTRL/TAP"), "{e}");
+        args["ctrl"] = json!({"4": ["FX3", "DLY"]});
+        assert!(matches!(
+            run_tool("aplicar_timbre", &args, &ctx),
+            ToolOutcome::Apply(_, _, ctrl) if ctrl == [(6, 0x08)]
+        ));
     }
 
     #[test]

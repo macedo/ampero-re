@@ -44,6 +44,8 @@ struct App {
     current: Option<Preset>,
     selected_block: usize,
     confirm_save: bool,
+    /// Configurações globais (função dos footswitches), lidas na sincronização.
+    global: Option<ampero::global::GlobalSettings>,
     /// Janela dos alvos do CTRL aberta (pelo indicador do cabeçalho).
     show_ctrl: bool,
     /// Renomeando o preset no cabeçalho: texto em edição, erro de validação e pedido de foco.
@@ -87,6 +89,7 @@ impl App {
             selected_block: 2,
             confirm_save: false,
             show_ctrl: false,
+            global: None,
             name_edit: None,
             name_edit_error: None,
             name_edit_focus: false,
@@ -161,6 +164,7 @@ impl App {
             preset: self.current.as_ref(),
             resources: self.resources.as_ref(),
             unsaved: self.is_unsaved(),
+            active_ctrls: self.active_ctrls(),
         };
         match run_tool(name, args, &ctx) {
             ToolOutcome::Text(t) => (t, false),
@@ -219,6 +223,12 @@ impl App {
         }
     }
 
+    /// Máscara dos CTRL que fazem efeito (bit n = CTRL n+1): footswitches com Tap = CTRL/TAP no global.
+    /// Sem o global (não lido), todos.
+    fn active_ctrls(&self) -> u8 {
+        self.global.map_or(0x0F, |g| g.active_ctrls())
+    }
+
     /// O buffer de edição carregado difere do preset gravado.
     fn is_unsaved(&self) -> bool {
         self.current
@@ -262,7 +272,13 @@ impl App {
                     self.progress = Some(done as f32 / total as f32);
                     self.status = format!("Lendo presets… {done}/{total}");
                 }
-                Evt::Synced { presets, irs, secs } => {
+                Evt::Synced {
+                    presets,
+                    irs,
+                    global,
+                    secs,
+                } => {
+                    self.global = global;
                     self.status = format!("{} presets sincronizados em {secs:.2} s", presets.len());
                     self.presets = presets;
                     self.user_irs = irs;
@@ -479,7 +495,8 @@ impl App {
                         flow_arrow(ui, card_h);
                     }
                     let k = MODULES.iter().position(|m| *m == name).unwrap_or(0);
-                    let ctrl_mask = cur.ctrl_targets[k];
+                    // só os CTRL que fazem efeito (footswitch como CTRL/TAP no global)
+                    let ctrl_mask = cur.ctrl_targets[k] & self.active_ctrls();
                     let block = &mut cur.blocks[k];
                     let thumb = match (&self.resources, block.algorithm_name.as_deref()) {
                         (Some(res), Some(n)) => res.image_path(block.module, n),
@@ -1038,6 +1055,8 @@ impl App {
         }
         let mut open = true;
         let mut changes: Vec<(usize, u8)> = Vec::new();
+        let active = self.active_ctrls();
+        let global = self.global;
         egui::Window::new(format!("CTRL do {} \"{}\"", cur.label, cur.name))
             .id(egui::Id::new("ctrl-window"))
             .open(&mut open)
@@ -1049,55 +1068,44 @@ impl App {
                     RichText::new("Marque os blocos que cada CTRL liga e desliga neste preset.")
                         .weak(),
                 );
-                for ctrl in 1..=4u8 {
+                if global.is_none() {
+                    ui.label(
+                        RichText::new(
+                            "Não deu para ler as configurações globais da pedaleira; mostrando todos os CTRL.",
+                        )
+                        .small()
+                        .weak(),
+                    );
+                }
+                // primeiro os CTRL que fazem efeito; os outros (footswitch que não está como CTRL/TAP no
+                // global) vêm recolhidos e esmaecidos, com os alvos que o preset guarda
+                let ctrls = (1..=4u8)
+                    .filter(|c| active & (1 << (c - 1)) != 0)
+                    .chain((1..=4u8).filter(|c| active & (1 << (c - 1)) == 0));
+                for ctrl in ctrls {
                     let bit = 1u8 << (ctrl - 1);
-                    let function = cur.ctrl_functions[ctrl as usize - 1];
-                    ui.add_space(6.0);
-                    ui.horizontal(|ui| {
-                        ui.label(
-                            RichText::new(format!("CTRL {ctrl}"))
-                                .strong()
-                                .color(CTRL_BLUE),
-                        );
-                        let state = if cur.ctrl_state & bit != 0 {
-                            " · acionado"
-                        } else {
-                            ""
-                        };
+                    if active & bit != 0 {
+                        Self::ctrl_section(ui, cur, ctrl, &mut changes);
+                        continue;
+                    }
+                    let fs = global.map_or("?", |g| g.fs_tap_name(ctrl as usize));
+                    ui.add_space(4.0);
+                    egui::CollapsingHeader::new(
+                        RichText::new(format!("CTRL {ctrl} · sem efeito")).weak(),
+                    )
+                    .id_salt(("ctrl-inactive", ctrl))
+                    .default_open(false)
+                    .show(ui, |ui| {
                         ui.label(
                             RichText::new(format!(
-                                "função: {}{state}",
-                                ampero::preset::ctrl_function_name(function)
+                                "O footswitch {ctrl} está como \"{fs}\" nas configurações globais, então o CTRL \
+                                 {ctrl} não liga nem desliga nada. Os blocos marcados ficam guardados no preset."
                             ))
                             .small()
                             .weak(),
-                        )
-                        .on_hover_text("A função se muda no editor oficial (CTRL/EXP)");
-                    });
-                    if function != 0 {
-                        ui.label(
-                            RichText::new(
-                                "Com essa função, os blocos marcados não são alternados.",
-                            )
-                            .small()
-                            .weak(),
                         );
-                    }
-                    // mesma disposição do editor oficial: ordem de armazenamento, 5 + 4 por linha
-                    egui::Grid::new(("ctrl-grid", ctrl))
-                        .num_columns(5)
-                        .show(ui, |ui| {
-                            for (k, module) in MODULES.iter().enumerate() {
-                                let mut on = cur.ctrl_targets[k] & bit != 0;
-                                if ui.checkbox(&mut on, *module).changed() {
-                                    changes.push((k, cur.ctrl_targets[k] ^ bit));
-                                }
-                                if k == 4 {
-                                    ui.end_row();
-                                }
-                            }
-                            ui.end_row();
-                        });
+                        Self::ctrl_section(ui, cur, ctrl, &mut changes);
+                    });
                 }
                 ui.add_space(6.0);
                 ui.label(
@@ -1114,6 +1122,58 @@ impl App {
         }
         if !open {
             self.show_ctrl = false;
+        }
+    }
+
+    /// Uma seção da janela do CTRL: nome, função (leitura) e as caixas dos 9 blocos. Mudanças vão para `changes`.
+    fn ctrl_section(ui: &mut egui::Ui, cur: &Preset, ctrl: u8, changes: &mut Vec<(usize, u8)>) {
+        {
+            let bit = 1u8 << (ctrl - 1);
+            let function = cur.ctrl_functions[ctrl as usize - 1];
+            ui.add_space(6.0);
+            ui.horizontal(|ui| {
+                ui.label(
+                    RichText::new(format!("CTRL {ctrl}"))
+                        .strong()
+                        .color(CTRL_BLUE),
+                );
+                let state = if cur.ctrl_state & bit != 0 {
+                    " · acionado"
+                } else {
+                    ""
+                };
+                ui.label(
+                    RichText::new(format!(
+                        "função: {}{state}",
+                        ampero::preset::ctrl_function_name(function)
+                    ))
+                    .small()
+                    .weak(),
+                )
+                .on_hover_text("A função se muda no editor oficial (CTRL/EXP)");
+            });
+            if function != 0 {
+                ui.label(
+                    RichText::new("Com essa função, os blocos marcados não são alternados.")
+                        .small()
+                        .weak(),
+                );
+            }
+            // mesma disposição do editor oficial: ordem de armazenamento, 5 + 4 por linha
+            egui::Grid::new(("ctrl-grid", ctrl))
+                .num_columns(5)
+                .show(ui, |ui| {
+                    for (k, module) in MODULES.iter().enumerate() {
+                        let mut on = cur.ctrl_targets[k] & bit != 0;
+                        if ui.checkbox(&mut on, *module).changed() {
+                            changes.push((k, cur.ctrl_targets[k] ^ bit));
+                        }
+                        if k == 4 {
+                            ui.end_row();
+                        }
+                    }
+                    ui.end_row();
+                });
         }
     }
 

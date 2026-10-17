@@ -13,6 +13,7 @@ USO:
   ampero show P29-1                    lê um preset do banco de usuário
   ampero current                       lê o buffer de edição (preset atual)
   ampero dump [P29-1]                  bytes crus do preset (ou do buffer de edição) em hexa
+  ampero global                        estado global (configurações) em hexa
   ampero diff                          compara o buffer de edição com o preset salvo (byte a byte)
   ampero info MOD NOME                 foto e descrição de um efeito (lidas da instalação do editor oficial)
   ampero select P29-1                  seleciona preset (CC0 + Program Change)
@@ -133,6 +134,17 @@ fn main() -> Result<()> {
             print!("{}", pr.summary());
             eprintln!("lido em {:.1} ms", t0.elapsed().as_secs_f64() * 1e3);
             write_json(&a.json, &pr)?;
+        }
+        "global" => {
+            // estado global (resposta de `11 00 02 09 00`): os dados vêm em nibbles a partir do byte 13
+            let mut dev = Device::open(&a.port)?;
+            let resp = dev.global_state()?;
+            let data = protocol::from_nibbles(&resp[13..resp.len() - 3]);
+            println!("estado global: {} bytes", data.len());
+            for (row, chunk) in data.chunks(16).enumerate() {
+                let hex: Vec<String> = chunk.iter().map(|b| format!("{b:02x}")).collect();
+                println!("{:03x}: {}", row * 16, hex.join(" "));
+            }
         }
         "dump" => {
             // os 459 bytes crus em hexa, 16 por linha (sem argumento: o buffer de edição)

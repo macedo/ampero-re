@@ -57,6 +57,8 @@ pub enum Evt {
     Synced {
         presets: Vec<Preset>,
         irs: Vec<Option<String>>,
+        /// Configurações globais (função dos footswitches); `None` se não deu para decodificar.
+        global: Option<ampero::global::GlobalSettings>,
         secs: f64,
     },
     Current(Preset),
@@ -220,7 +222,7 @@ fn handle(d: &mut Device, cmd: Cmd, emit: &impl Fn(Evt)) -> anyhow::Result<()> {
         Cmd::Sync => {
             let t0 = Instant::now();
             d.handshake(0)?;
-            d.global_state()?;
+            let global = d.global_settings().ok();
             let irs = (0..20)
                 .map(|i| d.name(0x07, i))
                 .collect::<anyhow::Result<Vec<_>>>()?;
@@ -238,6 +240,7 @@ fn handle(d: &mut Device, cmd: Cmd, emit: &impl Fn(Evt)) -> anyhow::Result<()> {
             emit(Evt::Synced {
                 presets,
                 irs,
+                global,
                 secs: t0.elapsed().as_secs_f64(),
             });
             emit(Evt::Current(d.read_edit_buffer()?));
