@@ -7,6 +7,7 @@ mod app_menu;
 mod mcp_server;
 mod self_update;
 mod settings;
+mod theme;
 mod widgets;
 mod worker;
 
@@ -73,6 +74,7 @@ struct App {
 
 impl App {
     fn new(cc: &eframe::CreationContext<'_>) -> App {
+        theme::apply(&cc.egui_ctx);
         let ctx = cc.egui_ctx.clone();
         let worker = Worker::spawn(move || ctx.request_repaint());
         let app = App {
@@ -345,46 +347,79 @@ impl App {
     }
 
     fn top_bar(&mut self, ui: &mut egui::Ui) {
+        // Barra enxuta: marca, conexão (os controles de manutenção ficam no menu dela), status discreto e,
+        // à direita, MCP e ⚙. O que se usa o tempo todo (salvar, volume, tempo) está no cabeçalho do preset.
         ui.horizontal(|ui| {
-            ui.heading("AMPERO");
-            ui.separator();
-            ui.label("Porta:");
-            ui.add(egui::TextEdit::singleline(&mut self.port).desired_width(110.0));
-            if ui
-                .button(if self.connected {
-                    "Reconectar"
-                } else {
-                    "Conectar"
-                })
-                .clicked()
-            {
-                self.send(Cmd::Connect(self.port.clone()));
-            }
-            ui.add_enabled_ui(self.connected && self.progress.is_none(), |ui| {
-                if ui.button("⟳ Sincronizar").clicked() {
-                    self.send(Cmd::Sync);
-                }
-                if ui.button("Ler atual").clicked() {
-                    self.send(Cmd::ReadCurrent);
-                }
-            });
-            ui.separator();
-            let dot = if self.connected {
-                Color32::from_rgb(80, 200, 120)
+            ui.label(
+                RichText::new("AMPERO")
+                    .size(theme::LABEL)
+                    .strong()
+                    .extra_letter_spacing(1.5),
+            );
+            ui.add_space(theme::S3);
+            let (dot, label) = if self.connected {
+                (theme::OK, "Ampero conectado")
             } else {
-                Color32::from_rgb(220, 80, 80)
+                (theme::ERROR, "Desconectado")
             };
             let (rect, _) = ui.allocate_exact_size(egui::vec2(10.0, 10.0), egui::Sense::hover());
             ui.painter().circle_filled(rect.center(), 4.5, dot);
+            ui.menu_button(label, |ui| {
+                ui.set_min_width(240.0);
+                ui.horizontal(|ui| {
+                    ui.label("Porta MIDI");
+                    ui.add(egui::TextEdit::singleline(&mut self.port).desired_width(130.0))
+                        .on_hover_text("Trecho do nome da porta MIDI da pedaleira");
+                });
+                let reconnect = if self.connected {
+                    "Reconectar"
+                } else {
+                    "Conectar"
+                };
+                if ui.button(reconnect).clicked() {
+                    self.send(Cmd::Connect(self.port.clone()));
+                    ui.close();
+                }
+                ui.separator();
+                ui.add_enabled_ui(self.connected && self.progress.is_none(), |ui| {
+                    if ui
+                        .button("Sincronizar presets")
+                        .on_hover_text("Relê os nomes e todos os presets da pedaleira")
+                        .clicked()
+                    {
+                        self.send(Cmd::Sync);
+                        ui.close();
+                    }
+                    if ui
+                        .button("Reler o preset atual")
+                        .on_hover_text("Relê o buffer de edição da pedaleira")
+                        .clicked()
+                    {
+                        self.send(Cmd::ReadCurrent);
+                        ui.close();
+                    }
+                });
+            })
+            .response
+            .on_hover_text("Conexão com a pedaleira");
             if let Some(f) = self.progress {
                 ui.add(egui::ProgressBar::new(f).desired_width(160.0));
             }
-            ui.label(&self.status);
+            ui.add_space(theme::S2);
+            ui.label(RichText::new(&self.status).size(theme::META).weak());
             if let Some((text, at)) = &self.activity {
-                ui.separator();
                 let age = at.elapsed().as_secs_f32();
-                let color = if age < 1.5 { accent(ui) } else { Color32::GRAY };
-                ui.label(RichText::new(format!("Pedaleira: {text}")).color(color));
+                let color = if age < 1.5 {
+                    accent(ui)
+                } else {
+                    ui.visuals().weak_text_color()
+                };
+                ui.add_space(theme::S2);
+                ui.label(
+                    RichText::new(format!("Pedaleira: {text}"))
+                        .size(theme::META)
+                        .color(color),
+                );
                 if age < 1.5 {
                     ui.ctx()
                         .request_repaint_after(std::time::Duration::from_millis(200));
@@ -504,19 +539,23 @@ impl App {
                     }
                     .and_then(|p| self.texture(ui.ctx(), &p));
 
-                    let fill = if block.on {
-                        themed(
-                            ui,
-                            Color32::from_rgb(70, 55, 20),
-                            Color32::from_rgb(250, 236, 200),
-                        )
-                    } else {
-                        themed(ui, Color32::from_gray(35), Color32::from_gray(236))
+                    // Card neutro: ligado/desligado se lê pela pílula ON e pela miniatura (cheia ou
+                    // esmaecida); a seleção, pelo contorno claro e um fundo um tom acima. O dourado fica só
+                    // para "ligado" (ver theme.rs).
+                    let selected = self.selected_block == k;
+                    let fill = match (selected, ui.visuals().dark_mode) {
+                        (true, true) => Color32::from_gray(48),
+                        (false, true) => Color32::from_gray(32),
+                        (true, false) => Color32::WHITE,
+                        (false, false) => Color32::from_gray(238),
                     };
-                    let stroke = if self.selected_block == k {
-                        Color32::from_rgb(230, 180, 60)
+                    let stroke = if selected {
+                        egui::Stroke::new(2.0, theme::selected(ui))
                     } else {
-                        themed(ui, Color32::from_gray(70), Color32::from_gray(190))
+                        egui::Stroke::new(
+                            1.0,
+                            themed(ui, Color32::from_gray(62), Color32::from_gray(200)),
+                        )
                     };
                     // o card inteiro é arrastável (a posição na cadeia vai como carga) e clicável: o clique
                     // no ON/OFF liga/desliga, no resto do card seleciona o bloco (ver `drag_card`)
@@ -524,9 +563,9 @@ impl App {
                         ui.spacing_mut().item_spacing.x = card_spacing; // dentro do card, o normal
                         egui::Frame::new()
                             .fill(fill)
-                            .stroke(egui::Stroke::new(1.5, stroke))
-                            .corner_radius(6.0)
-                            .inner_margin(6.0)
+                            .stroke(stroke)
+                            .corner_radius(8.0)
+                            .inner_margin(theme::S2 - 1.0)
                             .show(ui, |ui| {
                                 ui.set_width(CARD_W);
                                 ui.vertical(|ui| {
@@ -539,22 +578,26 @@ impl App {
                                                     RichText::new(block.module).strong(),
                                                 ),
                                             );
-                                            let (text, color) = if block.on {
-                                                ("ON", accent(ui))
-                                            } else {
-                                                (
-                                                    "OFF",
-                                                    themed(
-                                                        ui,
-                                                        Color32::from_gray(140),
-                                                        Color32::from_gray(110),
-                                                    ),
+                                            // pílula ON acesa (dourada) ou OFF apagada
+                                            let toggle = if block.on {
+                                                egui::Button::new(
+                                                    RichText::new("ON")
+                                                        .size(theme::META)
+                                                        .strong()
+                                                        .color(Color32::from_rgb(40, 28, 0)),
                                                 )
+                                                .fill(widgets::GOLD)
+                                            } else {
+                                                egui::Button::new(
+                                                    RichText::new("OFF")
+                                                        .size(theme::META)
+                                                        .strong()
+                                                        .color(ui.visuals().weak_text_color()),
+                                                )
+                                                .fill(Color32::TRANSPARENT)
                                             };
-                                            let toggle = egui::Button::new(
-                                                RichText::new(text).small().strong().color(color),
-                                            );
-                                            ui.add_sized([34.0, 18.0], toggle).rect
+                                            ui.add_sized([34.0, 18.0], toggle.corner_radius(9.0))
+                                                .rect
                                         })
                                         .inner;
                                     // meio: miniatura
@@ -568,8 +611,8 @@ impl App {
                                             } else {
                                                 img.tint(themed(
                                                     ui,
-                                                    Color32::from_gray(110),
-                                                    Color32::from_gray(170),
+                                                    Color32::from_gray(85),
+                                                    Color32::from_gray(150),
                                                 ))
                                             };
                                             egui::Button::image(img).frame(false)
@@ -585,9 +628,9 @@ impl App {
                                     ctrl_badge(ui, thumb_rect, ctrl_mask);
                                     // embaixo: nome do efeito
                                     let label = block.algorithm_name.as_deref().unwrap_or("?");
-                                    let select = egui::Button::new(RichText::new(label).small())
-                                        .frame(false)
-                                        .truncate();
+                                    let name = RichText::new(label).size(theme::META);
+                                    let name = if block.on { name } else { name.weak() };
+                                    let select = egui::Button::new(name).frame(false).truncate();
                                     ui.add_sized([CARD_W, 16.0], select);
                                     toggle_rect
                                 })
@@ -691,27 +734,68 @@ impl App {
         let module = MODULES[k];
         let block = &mut cur.blocks[k];
 
+        // cabeçalho do bloco: tipo + algoritmo, com ‹ › para passar pelos algoritmos sem abrir a lista
         ui.horizontal(|ui| {
-            ui.label(RichText::new(module).heading());
+            ui.label(
+                RichText::new(module)
+                    .size(theme::SECTION)
+                    .strong()
+                    .color(ui.visuals().weak_text_color()),
+            );
+            ui.add_space(theme::S1);
+            let algorithms = params::algorithms_of(module);
+            let pos = algorithms.iter().position(|(c, _)| *c == block.algorithm);
             let mut alg = block.algorithm;
+            let step = |delta: isize| {
+                let n = algorithms.len() as isize;
+                pos.map(|p| algorithms[((p as isize + delta).rem_euclid(n)) as usize].0)
+            };
+            if ui
+                .button(RichText::new("‹").size(theme::SECTION))
+                .on_hover_text("Algoritmo anterior")
+                .clicked()
+                && let Some(a) = step(-1)
+            {
+                alg = a;
+            }
             egui::ComboBox::from_id_salt("algorithm")
-                .width(220.0)
+                .width(240.0)
+                .height(420.0)
                 .selected_text(
-                    block
-                        .algorithm_name
-                        .clone()
-                        .unwrap_or_else(|| format!("#{alg}")),
+                    RichText::new(
+                        block
+                            .algorithm_name
+                            .clone()
+                            .unwrap_or_else(|| format!("#{alg}")),
+                    )
+                    .size(theme::LABEL)
+                    .strong(),
                 )
                 .show_ui(ui, |ui| {
-                    for (code, name) in params::algorithms_of(module) {
-                        ui.selectable_value(&mut alg, code, name);
+                    for (code, name) in &algorithms {
+                        ui.selectable_value(&mut alg, *code, *name);
                     }
                 });
+            if ui
+                .button(RichText::new("›").size(theme::SECTION))
+                .on_hover_text("Próximo algoritmo")
+                .clicked()
+                && let Some(a) = step(1)
+            {
+                alg = a;
+            }
+            if let Some(p) = pos {
+                ui.label(
+                    RichText::new(format!("{} de {}", p + 1, algorithms.len()))
+                        .size(theme::META)
+                        .weak(),
+                );
+            }
             if alg != block.algorithm {
                 self.send(Cmd::SetAlgorithm { block: k, alg });
             }
         });
-        ui.add_space(8.0);
+        ui.add_space(theme::S2);
 
         // valores salvos do mesmo bloco (para marcar o que mudou), se o algoritmo for o mesmo
         let saved: Option<Vec<u16>> = self
@@ -724,7 +808,9 @@ impl App {
         let name = block.algorithm_name.clone();
         ui.horizontal_top(|ui| {
             let left_h = self.effect_info(ui, module, name.as_deref());
+            ui.add_space(theme::S2);
             ui.separator();
+            ui.add_space(theme::S4);
             ui.vertical(|ui| self.param_grid(ui, k, module, block, saved.as_deref(), left_h));
         });
     }
@@ -749,14 +835,24 @@ impl App {
                 ui.vertical_centered(|ui| ui.image((tex.id(), size * scale)));
             }
             if let Some(n) = name {
-                ui.label(RichText::new(n).strong().size(16.0));
+                ui.add_space(theme::S1);
+                ui.label(RichText::new(n).strong().size(theme::LABEL));
             }
             match (&self.resources, description) {
                 (_, Some(text)) => {
-                    egui::ScrollArea::vertical()
-                        .id_salt("description")
-                        .max_height(300.0)
-                        .show(ui, |ui| description_view(ui, &text));
+                    // só a primeira frase à mostra; o texto todo (com os controles) fica recolhível
+                    let first = first_sentence(&text);
+                    ui.label(RichText::new(first).weak());
+                    ui.add_space(theme::S1);
+                    egui::CollapsingHeader::new(RichText::new("Sobre o efeito").size(theme::META))
+                        .id_salt("effect-about")
+                        .default_open(false)
+                        .show(ui, |ui| {
+                            egui::ScrollArea::vertical()
+                                .id_salt("description")
+                                .max_height(300.0)
+                                .show(ui, |ui| description_view(ui, &text));
+                        });
                 }
                 (Some(_), None) => {
                     ui.label(
@@ -978,7 +1074,7 @@ impl App {
             self.name_edit_error = None;
         }
         let Some((_, buf)) = self.name_edit.as_mut() else {
-            let text = RichText::new(&cur.name).size(22.0).strong();
+            let text = RichText::new(&cur.name).size(theme::TITLE).strong();
             if cur.bank == 0 {
                 ui.label(text)
                     .on_hover_text("Presets de fábrica não podem ser renomeados");
@@ -998,7 +1094,7 @@ impl App {
         let resp = ui.add(
             egui::TextEdit::singleline(buf)
                 .char_limit(16)
-                .font(egui::FontId::proportional(20.0))
+                .font(egui::FontId::proportional(theme::TITLE - 2.0))
                 .desired_width(230.0)
                 .hint_text("nome do preset"),
         );
@@ -1176,22 +1272,49 @@ impl App {
 
     fn header(&mut self, ui: &mut egui::Ui, cur: &mut Preset) {
         ui.horizontal(|ui| {
-            ui.label(RichText::new(&cur.label).size(22.0).strong());
+            ui.label(
+                RichText::new(&cur.label)
+                    .size(theme::TITLE)
+                    .strong()
+                    .color(ui.visuals().weak_text_color()),
+            );
             self.name_editor(ui, cur);
-            if self.differs_from_saved(cur) {
-                ui.label(RichText::new("não salvo").color(accent(ui)));
+            let dirty = self.differs_from_saved(cur);
+            if dirty {
+                ui.label(RichText::new("não salvo").color(theme::warn(ui)))
+                    .on_hover_text("O buffer da pedaleira difere do preset gravado");
             }
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 let can_save = self.connected && cur.bank == 1;
+                // botão principal (dourado) quando há o que salvar; discreto quando não há
+                let save = if dirty {
+                    egui::Button::new(
+                        RichText::new("Salvar")
+                            .strong()
+                            .color(Color32::from_rgb(40, 28, 0)),
+                    )
+                    .fill(widgets::GOLD)
+                } else {
+                    egui::Button::new("Salvar")
+                };
                 if ui
-                    .add_enabled(can_save, egui::Button::new("💾 Salvar"))
-                    .on_disabled_hover_text("só no banco de usuário")
+                    .add_enabled(can_save, save.min_size(egui::vec2(72.0, 26.0)))
+                    .on_disabled_hover_text("Só presets do banco de usuário podem ser salvos")
                     .clicked()
                 {
                     self.confirm_save = true;
                 }
-                ui.label(if cur.volume_pre { "Pre" } else { "Post" })
-                    .on_hover_text("Posição do volume do patch na cadeia");
+                ui.add_space(theme::S2);
+                ui.label(
+                    RichText::new(if cur.volume_pre { "vol. pré" } else { "vol. pós" })
+                        .size(theme::META)
+                        .weak(),
+                )
+                .on_hover_text(if cur.volume_pre {
+                    "O volume do patch fica antes dos efeitos"
+                } else {
+                    "O volume do patch fica depois dos efeitos"
+                });
                 ui.separator();
                 // da direita para a esquerda: o campo de tempo entra antes do rótulo "Tempo"
                 self.tempo_editor(ui, cur);
@@ -1230,8 +1353,8 @@ impl App {
                 // layout da direita para a esquerda: isto aparece à esquerda do volume/tempo
                 // qual CTRL está acionado (0x1AB, bit n = CTRL n+1); clicar abre a janela dos alvos
                 let (text, color) = match ctrl_list(cur.ctrl_state & 0x0F) {
-                    Some(on) => (format!("{on} ON"), accent(ui)),
-                    None => ("CTRL off".to_string(), Color32::from_gray(120)),
+                    Some(on) => (format!("{on} ON"), theme::CTRL),
+                    None => ("CTRL off".to_string(), ui.visuals().weak_text_color()),
                 };
                 let resp = ui
                     .add(
@@ -1318,7 +1441,7 @@ impl eframe::App for App {
 }
 
 /// Azul dos CTRL (selo dos cards, janela e indicador): distinto do dourado do ON e legível nos dois temas.
-const CTRL_BLUE: Color32 = Color32::from_rgb(55, 138, 221);
+const CTRL_BLUE: Color32 = theme::CTRL;
 
 /// Texto dos CTRL de uma máscara (bit n = CTRL n+1): "CTRL 4", "CTRL 3·4".
 fn ctrl_list(mask: u8) -> Option<String> {
@@ -1401,6 +1524,15 @@ fn same_sound(a: &Preset, b: &Preset, ignore_on: &[bool; 9]) -> bool {
             .all(|(k, (x, y))| {
                 (ignore_on[k] || x.on == y.on) && x.algorithm == y.algorithm && x.params == y.params
             })
+}
+
+/// Primeira frase da descrição (até o primeiro ponto ou quebra de linha), para o resumo à mostra.
+fn first_sentence(text: &str) -> &str {
+    let line = text.trim_start().lines().next().unwrap_or("");
+    match line.find(". ") {
+        Some(i) => &line[..=i],
+        None => line,
+    }
 }
 
 /// Descrição do efeito: parágrafos normais; na seção "Controls:" o nome de cada controle vem em destaque,

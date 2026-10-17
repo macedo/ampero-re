@@ -508,9 +508,9 @@ pub fn centered_row<R>(ui: &mut egui::Ui, id: egui::Id, add: impl FnOnce(&mut eg
 /// Escala dos knobs conforme a quantidade: poucos ficam grandes, muitos ficam compactos.
 pub fn knob_scale(count: usize) -> f32 {
     match count {
-        0..=3 => 1.35,
-        4..=6 => 1.1,
-        _ => 0.9,
+        0..=3 => 1.5,
+        4..=6 => 1.3,
+        _ => 1.05,
     }
 }
 
